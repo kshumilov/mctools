@@ -46,15 +46,18 @@ mat_patt = re.compile(r'^[\s\d.D+\-]*$')
 mat_idx_patt = re.compile(r'\s+(\d+)[\s\n]')
 
 
-def read_matrix_in_file(file: TextIO, first_line: str = '', is_square: bool = True,
+def read_matrix_in_file(file: TextIO, header: re.Pattern, first_line: str = '',
                         shape: tuple[int, ...] | None = None,
                         dtype: npt.DTypeLike = np.float_) -> tuple[np.ndarray, str]:
-    # TODO: implement finding matrix by header
+    # Finding matrix by header
+    match, line = find_line_in_file(file, header, first_line=first_line)
+    if match is None:
+        raise ValueError(f"Couldn't find {header.pattern}")
 
     cols_idx: list[int] = []
     raw_matrix: list[list[str]] = []
 
-    while (line := (first_line if first_line else file.readline())) and mat_patt.search(line):
+    while (line := file.readline()) and mat_patt.search(line):
         idx = list(map(int, mat_idx_patt.findall(line)))
         if len(idx) == 1 and '.' in line:
             values = line.split()[1:]
@@ -66,11 +69,9 @@ def read_matrix_in_file(file: TextIO, first_line: str = '', is_square: bool = Tr
         else:
             cols_idx.extend([i - 1 for i in idx])
 
-        first_line = ''
-
     n_rows, n_cols = len(raw_matrix), len(cols_idx)
 
-    if is_square:
+    if n_rows == n_cols:
         if n_cols > len(raw_matrix[0]):
             matrix = np.empty((n_rows, n_cols), dtype='<U15')
 

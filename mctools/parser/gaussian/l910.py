@@ -173,8 +173,7 @@ def read_pdm_diags(file: TextIO, n_states: int, n_mos: int, /, first_line: str =
 
     pdm_diags: np.ndarray = np.empty((n_states, n_mos), dtype=np.float_)
     for i in range(n_states):
-        diag_info, line = find_pattern_in_file(file, pdm_diag_patt, first_line=line, default_group_map=int)
-        pdm_diag, line = read_matrix_in_file(file, is_square=False, shape=(n_mos,))
+        pdm_diag, line = read_matrix_in_file(file, pdm_diag_patt, shape=(n_mos,))
         pdm_diags[i] = pdm_diag
 
     return dict(pdm_diags=pdm_diags), line
