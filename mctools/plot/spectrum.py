@@ -1,7 +1,11 @@
 from typing import Callable
 
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
+
+
+from ..core import MCSpectrum
 
 __all__ = [
     'lorentizian',

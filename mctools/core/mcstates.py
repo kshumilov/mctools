@@ -11,9 +11,7 @@ from .mcspace import MCSpace, ConfigTransform
 
 __all__ = [
     'MCStates',
-    'align_states',
-
-    'Selector',
+    'Selector'
 ]
 
 
@@ -55,6 +53,7 @@ class MCStates:
     SOURCE_COL = 'source'
 
     COLS = [E_COL, STATE_COL, SOURCE_COL]
+    IDX_COLS = [STATE_COL, SOURCE_COL]
 
     df: pd.DataFrame
     ci_vecs: sparse.csr_array | sparse.lil_array
@@ -225,30 +224,29 @@ class MCStates:
         # FIXME: return DataFrame
         return self._state_map[mapped], np.take_along_axis(ovlp, mapped[:, np.newaxis], axis=1).ravel()
 
-    def merge(self, other: 'MCStates', overwrite: bool = False, ignore_space: bool = False, **kwargs) -> NoReturn:
+    def merge(self, other: 'MCStates', alignment, strategy: str = 'skip', ignore_space: bool = False) -> NoReturn:
         if not ignore_space and (self.space is None or other.space is None):
             warnings.warn('At least one of MCStates does not have well defined MCSpace, proceed with caution')
 
         if not ignore_space and self.space != other.space:
             raise ValueError('spaces of states are different, overlap is poorly defined')
 
-        alignment = align_states(self, other, ignore_space=ignore_space, **kwargs)
         for region in alignment:
             match region:
-                case None, slice(sl):
+                case None, slice():
+                    *_, sl = region
                     self.extend(other[sl], ignore_space=ignore_space, reset_index=False)
-                case slice(sl1), slice(sl2):
-                    if overwrite:
+                case slice(), slice():
+                    sl1, sl2 = region
+                    if strategy == 'overwrite':
                         self[sl1] = other[sl2]
+                    elif strategy == 'append':
+                        self.extend(other[sl2], ignore_space=ignore_space, reset_index=False)
 
         self.sort(self.E_COL)
 
     def extend(self, other: 'MCStates', ignore_space: bool = False, reset_index: bool = True) -> NoReturn:
-        """Extends the current MCStates with provided once.
-
-        The function only works on non-views, i.e. MCStates that have been obtained through direct construction or
-        with the use of copy.deepcopy().
-        """
+        """Extends the current MCStates with provided once."""
         if not ignore_space and (self.space is None or other.space is None):
             warnings.warn('At least one of MCStates does not have well defined MCSpace, proceed with caution')
 
@@ -546,100 +544,6 @@ class MCStates:
 
     def __len__(self) -> int:
         return len(self.df)
-
-
-def align_states(s1: MCStates, s2: MCStates, offset1: int = 0, offset2: int = 0,
-                 margin: int = 3, tol=0.7, ignore_space: bool = False,
-                 ignore_overlap: bool = False) -> list[tuple[slice | None, slice | None]]:
-    """Aligns states based on energy and overlap between CI vectors.
-
-    Assumes that states are sorted and contain no duplicates
-    """
-    if not ignore_space and s1.space != s2.space:
-        raise ValueError('Spaces are different CI vector overlap is poorly defined')
-
-    if not len(s1) and not len(s2):
-        return []
-    elif not len(s1) and len(s2):
-        return [(None, np.s_[offset2:offset2 + len(s2)])]
-    elif len(s1) and not len(s2):
-        return [(np.s_[offset1:offset1 + len(s1)], None)]
-
-    # Swap such that s1 comes before s2
-    if swapped := (s2.E[0] < s1.E[0]):
-        offset1, offset2 = offset2, offset1
-        s1, s2 = s2, s1
-
-    # check if states overlap
-    if s1.E[-1] < s2.E[0] or s1.E[0] > s2.E[-1]:
-        sl1 = np.s_[np.s_[offset1:offset1 + len(s1)]]
-        sl2 = np.s_[np.s_[offset2:offset1 + len(s2)]]
-
-        if swapped:
-            sl1, sl2 = sl2, sl1
-
-        return [(sl1, None), (None, sl2)]
-
-    result = []
-
-    # Find an approximate location of s2[l2] in s1 within window the size of +/- margin
-    w_begin = max(0, np.searchsorted(s1.E, s2.E[0]) - margin)
-    w_end = min(w_begin + 2 * margin, len(s1))
-
-    # Find the best overlap in the window
-    idx, overlap = s1[w_begin:w_end].find_similar(s2[0])
-    if overlap[0] < tol:
-        msg = f'Overlap below tolerance: {tol} > {overlap[0]}'
-        if ignore_overlap:
-            warnings.warn(msg)
-        else:
-            raise ValueError(msg)
-
-    # Mark states that present in s1 but not s2
-    start_1, start_2 = idx[0] + w_begin, 0
-    if start_1 != start_2:
-        sl1 = np.s_[offset1:offset1 + start_1]
-        if swapped:
-            result.append((None, sl1))
-        else:
-            result.append((sl1, None))
-
-    # Iterate through states one by one to make find the first non-overlapping states
-    end_1, end_2 = start_1 + 1, start_2 + 1
-    while end_1 < len(s1) and end_2 < len(s2):
-        v1 = s1.ci_vecs[[end_1], :]
-        v2 = s2.ci_vecs[[end_2], :]
-
-        overlap = np.abs((v1 @ v2.getH()).toarray())[0, 0]
-        if overlap > tol:
-            end_1 += 1
-            end_2 += 1
-        else:
-            break
-
-    # Create overlapping slices
-    sl1 = np.s_[offset1 + start_1:offset1 + end_1]
-    sl2 = np.s_[offset1 + start_2:offset1 + end_2]
-
-    # Update the offsets
-    offset1 += end_1
-    offset2 += end_2
-
-    if swapped:
-        offset1, offset2 = offset2, offset1
-        sl1, sl2 = sl2, sl1
-        s1, s2 = s2, s1
-
-    result.append((sl1, sl2))
-
-    # Check if there are states left and recursively search for the next overlap
-    if end_1 <= len(s1) or end_2 <= len(s2):
-        result.extend(align_states(s1[end_1:], s2[end_2:],
-                                   offset1=offset1, offset2=offset2,
-                                   margin=margin, tol=tol,
-                                   ignore_space=ignore_space,
-                                   ignore_overlap=ignore_overlap))
-    return result
 
 
 if __name__ == '__main__':

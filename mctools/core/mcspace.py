@@ -289,10 +289,19 @@ class MCSpace:
         return f'{self.__class__.__name__}([{ras_spec}])'
 
     def __eq__(self, other: 'MCSpace') -> bool:
-        return self.graph == other.graph and \
-               tuple(self._mo_blocks.items()) == tuple(other._mo_blocks.items()) and \
-               np.allclose(self._config_classes, other._config_classes) and \
-               (self._config_class_labels == other._config_class_labels).all()
+        if self.graph != other.graph:
+            return False
+
+        if self._mo_blocks:
+            if tuple(self._mo_blocks.items()) != tuple(other._mo_blocks.items()):
+                return False
+
+        if self._config_classes:
+            if not (np.allclose(self._config_classes, other._config_classes) and
+                    (self._config_class_labels == other._config_class_labels).all()):
+                return False
+
+        return True
 
 
 def extend_ras1_factory(n: int) -> ConfigTransform:
