@@ -1,6 +1,7 @@
+import warnings
 from itertools import product
-from dataclasses import dataclass, field, InitVar
-from typing import NamedTuple, NoReturn, Tuple, Optional, Literal, ClassVar, Any
+from dataclasses import dataclass, field
+from typing import NamedTuple, NoReturn, Tuple, Literal, ClassVar, Any
 
 import numpy as np
 import numpy.typing as npt
@@ -15,10 +16,13 @@ __all__ = [
 ]
 
 
-@dataclass(slots=True)
 class CIGraph:
-    """Implements basic CI string manipulations such as addressing, excitation lists, etc.
+    """Basic CI string manipulations such as addressing, excitation lists, etc.
 
+    In this implementations, the edge unoccupied edges of the graph are taken to be zero.
+    This means that only occupied orbitals play roles in formation of the CI configuration address.
+
+    TODO: Rewrite nodes and edges formation in rectangle format (i.e. transform parallelogram graph into rectangle)
     TODO: rewrite conversion using hdf5 format
     TODO: implement <I|J>, p^+|J>, p|J>, excitation lists, etc...
     TODO: (maybe) Implement as a subclass of np.ndarray
@@ -26,38 +30,55 @@ class CIGraph:
     TODO: allow python int type for configurations
     TODO: Use dtype with multiple int fields to manipulate strings
     """
+    __slots__ = [
+        'n_orb', 'n_elec',
+        'n_configs', 'reverse',
+        'edges', 'offsets'
+    ]
+
     n_orb: int
     n_elec: int
 
-    reverse: bool = False
+    n_configs: int
+    reverse: bool
 
-    nodes: InitVar[Optional[npt.NDArray[np.uint64]]] = field(default=None)
-    Y: npt.NDArray[np.uint64] = field(init=False, repr=False)
+    nodes: npt.NDArray[np.uint64]
+    edges: npt.NDArray[np.uint64]
+    offsets: npt.NDArray[np.uint64]
 
-    n_configs: int = field(init=False)
-
-    # TODO: Use occupation lists
-    config_dtype: ClassVar[npt.DTypeLike] = np.dtype(np.int64)
     dtype: ClassVar[npt.DTypeLike] = np.dtype(np.uint64)
+    config_dtype: ClassVar[npt.DTypeLike] = np.dtype(np.int64)
     max_orb: ClassVar[np.int64] = dtype.type(config_dtype.itemsize * BYTE_TO_BITS)
 
-    def __post_init__(self, nodes: npt.NDArray[np.uint64] | None):
-        assert self.n_orb <= self.max_orb
+    def __init__(self, n_orb: int, n_elec: int, /, reverse: bool = False, nodes: npt.NDArray[np.uint64] | None = None):
+        if n_orb > self.max_orb:
+            raise ValueError(f'{self.__class__.__name__} is unable to support space with {n_orb} orbitals. '
+                             f'Current maximum is {self.max_orb} orbitals')
 
-        if not self.n_orb >= self.n_elec >= 0:
+        if not (n_orb >= n_elec >= 0):
             raise ValueError('Invalid definition of active space')
 
+        self.n_orb = n_orb
+        self.n_elec = n_elec
+        self.reverse = reverse
+
+        self.n_configs = get_num_configs(self.n_orb, self.n_elec)
+        if self.n_configs == 0:
+            spec = self.get_graph_spec()
+            warnings.warn(f'Graph {spec} is emtpy', RuntimeWarning)
+
         nodes = self.get_nodes() if nodes is None else nodes
-        self.n_configs = comb(self.n_orb, self.n_elec, exact=True)
-
         if self.reverse:
-            assert self.n_configs == nodes[-1, -1]
+            if self.n_configs != nodes[-1, -1]:
+                raise ValueError(f'Provided nodes might be indexing strings in direct order.')
         else:
-            assert self.n_configs == nodes[0, 0]
+            if self.n_configs != nodes[0, 0]:
+                raise ValueError(f'Provided nodes might be indexing strings in reverse order.')
 
-        self.Y = self.get_edges(nodes)
+        self.edges = self.get_edges(nodes)
+        self.offsets = self.get_offsets(self.edges)
 
-    def get_edges(self, nodes: npt.NDArray[np.uint64]) -> npt.NDArray[np.uint]:
+    def get_edges(self, nodes: npt.NDArray[np.uint64], /) -> npt.NDArray[np.uint64]:
         Y = np.zeros((self.n_elec, self.n_orb), dtype=self.dtype)
 
         e_idx, o_idx = self.get_node_idx()
@@ -116,9 +137,15 @@ class CIGraph:
             Tuple of arrays, where the first array are electrons indices and second — orbitals.
         """
         l_o = self.n_orb - self.n_elec
-        e_idx, o_idx = np.indices((self.n_elec + 1, l_o + 1), dtype=np.uint8)
+        e_idx, o_idx = np.indices((self.n_elec + 1, l_o + 1), dtype=np.uint64)
         o_idx += e_idx
         return e_idx.ravel(), o_idx.ravel()
+
+    def get_offsets(self, edges: npt.NDArray[np.uint64], /) -> npt.NDArray[np.uint64]:
+        offsets = edges.copy()
+        for e in range(self.n_elec - 2, -1, -1):
+            offsets[e] += np.roll(offsets[e + 1], -1)
+        return offsets
 
     def get_address(self, config: ConfigArray) -> AddrArray:
         config = np.asarray(config, dtype=self.dtype)
@@ -131,7 +158,7 @@ class CIGraph:
         while (idx := e < self.n_elec).any():
             bit = (config[idx] >> o) & self.dtype.type(1)
             e[idx] += bit
-            addr[idx] += self.Y[e[idx] - 1, o] * bit
+            addr[idx] += self.edges[e[idx] - 1, o] * bit
             o += self.dtype.type(1)
         return addr
 
@@ -140,17 +167,14 @@ class CIGraph:
         config = np.zeros_like(addr, dtype=self.config_dtype)
 
         e_idx, o_idx = self.get_node_idx()
-        e = self.n_elec
-        o_curr = np.full_like(addr, self.n_orb, dtype=self.config_dtype)
-        while e > 0:
-            o = o_idx[e_idx == e] - 1
-            for i in range(len(o_curr)):
-                j = np.searchsorted(addr[i] < self.Y[e - 1, e - 1:o_curr[i]], False, side='right')
-                o_curr[i] = o[j - 1]
-
-            addr -= self.Y[e - 1, o_curr]
-            config |= 1 << o_curr
-            e -= 1
+        e = 0
+        o_curr = np.full_like(addr, fill_value=0, dtype=self.dtype)
+        while e < self.n_elec:
+            o = o_idx[e_idx == e]
+            j = np.searchsorted(self.offsets[e, o], addr, side='right') - 1
+            addr -= self.edges[e, o[j]]
+            config |= (1 << o[j]).astype(self.config_dtype)
+            e += 1
         return config
 
     def get_all_configs(self) -> np.ndarray:
@@ -171,8 +195,12 @@ class CIGraph:
     def space_mask(self) -> int:
         return (self.config_dtype.type(1) << self.config_dtype.type(self.n_orb)) - self.config_dtype.type(1)
 
+    def get_graph_spec(self) -> str:
+        return f'[{self.n_elec:>2d}e, {self.n_orb:>2d}o]'
+
     def __repr__(self) -> str:
-        return f'{self.__class__.__name__}({self.n_elec:>2d}e, {self.n_orb:>2d}o, #Det={self.n_configs})'
+        spec = self.get_graph_spec()
+        return f'{self.__class__.__name__}({spec}, #Det={self.n_configs})'
 
     def __eq__(self, other: 'CIGraph') -> bool:
         return self.n_orb == other.n_orb and \
@@ -229,6 +257,8 @@ class RASGraph:
     graphs: list[list[CIGraph]] = field(init=False, repr=False)
     categories: np.ndarray = field(init=False, repr=False)
     restriction_map: np.ndarray = field(init=False, repr=False)
+
+    max_orb = CIGraph.max_orb
 
     def __post_init__(self) -> NoReturn:
         assert all(r >= 0 for r in self.spaces)
@@ -340,10 +370,12 @@ class RASGraph:
         for cat in np.unique(cat_idx):
             idx = cat_idx == cat
 
-            ih, n_e, ie = self.categories[cat, 4:7]
-            addr[idx, 0] = self.graphs[0][ih].get_address(config[idx, 0])
-            addr[idx, 1] = self.graphs[1][n_e].get_address(config[idx, 1])
-            addr[idx, 2] = self.graphs[2][ie].get_address(config[idx, 2])
+            # ih, n_e, ie = self.categories[cat, 4:7]
+            # addr[idx, 0] = self.graphs[0][ih].get_address(config[idx, 0])
+            # addr[idx, 1] = self.graphs[1][n_e].get_address(config[idx, 1])
+            # addr[idx, 2] = self.graphs[2][ie].get_address(config[idx, 2])
+            for i, cnt in enumerate(self.categories[cat, 4:7]):
+                addr[idx, i] = self.graphs[i][cnt].get_address(config[idx, i])
 
         # Ravel each address according to its category dimensions
         match self.cat_order:
@@ -351,7 +383,7 @@ class RASGraph:
                 offsets = self.categories[cat_idx, :2]
                 addr[:, 1:] *= offsets.cumprod(axis=1)
             case 'C':
-                # FIXME: Ordering of stings within category in row-major order
+                # TODO: Ordering of stings within category in row-major order
                 raise NotImplementedError('Raveling in row-major order is nor implemented yet')
 
         return addr.sum(axis=1) + self.categories[cat_idx, 3].astype(np.uint)
@@ -368,23 +400,28 @@ class RASGraph:
             case 'F':
                 addr[:, 0] = raveled_addr
 
-                addr[:, 1] = raveled_addr // self.categories[cat_idx, 0]
-                addr[:, 0] = raveled_addr % self.categories[cat_idx, 0]
+                # addr[:, 1] = raveled_addr // self.categories[cat_idx, 0]
+                # addr[:, 0] = raveled_addr % self.categories[cat_idx, 0]
+                #
+                # addr[:, 2] = addr[:, 1] // self.categories[cat_idx, 1]
+                # addr[:, 1] = addr[:, 1] % self.categories[cat_idx, 1]
+                for i in range(1, self.n_spaces - 1):
+                    addr[:, i], addr[:, i - 1] = np.divmod(addr[:, i - 1], self.categories[cat_idx, i - 1])
 
-                addr[:, 2] = addr[:, 1] // self.categories[cat_idx, 1]
-                addr[:, 1] = addr[:, 1] % self.categories[cat_idx, 1]
             case 'C':
-                # FIXME: Ordering of stings within category in row-major order
+                # TODO: Ordering of stings within category in row-major order
                 raise NotImplementedError('Raveling in row-major order is nor implemented yet')
 
         config = np.zeros_like(addr, dtype=CIGraph.config_dtype)
         for cat in np.unique(cat_idx):
             idx = cat_idx == cat
 
-            ih, n_e, ie = self.categories[cat, 4:7]
-            config[idx, 0] = self.graphs[0][ih].get_config(addr[idx, 0])
-            config[idx, 1] = self.graphs[1][n_e].get_config(addr[idx, 1])
-            config[idx, 2] = self.graphs[2][ie].get_config(addr[idx, 2])
+            # ih, n_e, ie = self.categories[cat, 4:7]
+            # config[idx, 0] = self.graphs[0][ih].get_config(addr[idx, 0])
+            # config[idx, 1] = self.graphs[1][n_e].get_config(addr[idx, 1])
+            # config[idx, 2] = self.graphs[2][ie].get_config(addr[idx, 2])
+            for i, cnt in enumerate(self.categories[cat, 4:7]):
+                config[idx, i] = self.graphs[i][cnt].get_config(addr[idx, i])
 
         return config
 
@@ -425,6 +462,11 @@ class RASGraph:
     def is_cas(self) -> bool:
         return self.n_mo == self.spaces[1]
 
+    @property
+    def is_1c(self) -> bool:
+        return self.n_elec != self.elec.alpha or \
+               self.n_elec != self.elec.beta
+
     def get_graph_spec(self) -> str:
         if self.is_cas:
             spec = f'{self.n_mo}o'
@@ -447,12 +489,35 @@ class RASGraph:
 
 
 if __name__ == '__main__':
-    ras = RASMOs(12, 14, 10)
-    elec = Electrons(13, 0)
+    ras = RASMOs(36, 14, 12)
+    elec = Electrons(36, 0)
     graph = RASGraph(ras, elec, 2, 2)
-    cnfgs = np.asarray([[4094, 8192, 256]], dtype=CIGraph.config_dtype)
-    addr = graph.get_address(cnfgs)
-    print(addr)
 
-    new_configs = graph.get_config(addr)
-    print(new_configs)
+    configs = graph.get_config([204391, 203794])
+    print(graph.get_config_repr(configs))
+
+    # g = CIGraph(7, 3)
+    # W = g.get_nodes()
+    # Y = g.get_edges(W)
+    #
+    # c = g.get_all_configs()
+    # a = g.get_address(c)
+    # r = g.get_config_repr(c)
+    # c_new = g.get_config(a)
+    #
+    # Yp = np.zeros_like(Y)
+    # Yp[-1] = Y[-1]
+    # print(Yp)
+    # print()
+    # for i in range(-1, -Y.shape[0] - 1, -1):
+    #     print(i)
+    #     print(f'ith + 1 = {i + 1}')
+    #     print(Yp[i + 1])
+    #     print('rolled')
+    #     print(np.roll(Yp[i + 1], -1))
+    #     print('+')
+    #     print(Y[i])
+    #     Yp[i] = np.roll(Yp[i + 1], -1) + Y[i]
+    #     print('final')
+    #     print(Yp)
+    #     print()

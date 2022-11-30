@@ -19,6 +19,9 @@ __all__ = [
 
 BYTE_TO_BITS = 8
 
+ONE_ULL = np.uint64(1)
+ONE_LL = np.int64(1)
+
 AddrArray = npt.NDArray[np.uint64]
 ConfigArray = npt.NDArray[np.int64]
 
