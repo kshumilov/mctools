@@ -336,7 +336,7 @@ class MCStates:
         if self.space._config_class_labels is not None:
             addrs = np.unique(data['addr'])
             lookup = self.space.get_address_class_lookup(addrs)
-            data['config_class'] = lookup.get(data['addr'], '')
+            data['config_class'] = np.vectorize(lambda i: lookup.get(i, ''))(data['addr'])
 
         df = pd.DataFrame(data)
         df.set_index(['idx', 'addr'], inplace=True)
