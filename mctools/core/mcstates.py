@@ -36,6 +36,9 @@ class MCStates:
     TODO: Explore LIL sparse structure for manipulation of ci_vec
     TODO: pd.MultiIndex for permanent cols, MO blocks, config classes, and other computed properties
     TODO: rewrite assertions as Errors
+    TODO: Adapt to using dense representation of CI vectors
+    TODO: try using STATE_COL and SOURCE_COL as index in df
+    TODO: include duplicate and similar
     """
     __slots__ = [
         'df',
@@ -329,7 +332,7 @@ class MCStates:
         if self.space.graph.is_cas:
             data['config'] = configs[:, 1]
         else:
-            data.update({f'r{i + 1}': configs[:, i] for i in range(self.space.n_ras)})
+            data.update({f'r{i + 1}': configs[:, i] for i in range(self.space.n_spaces)})
 
         data['config_repr'] = self.space.graph.get_config_repr(configs)
 

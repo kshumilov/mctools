@@ -2,8 +2,10 @@ import copy
 import warnings
 from typing import Any, NoReturn
 
+import numpy as np
 import pandas as pd
 
+from .mcspace import MCSpace
 from .mcstates import MCStates, Selector
 from .utils import get_state_alignment, get_state_map_from_alignment, StateAlignment
 
@@ -13,7 +15,7 @@ __all__ = [
 
 
 class MCSpectrum:
-    """Holds information about multiconfigurational states.
+    """Holds information about multiconfigurational peaks.
 
      Attributes:
         df: Energy (in Eh) of states, spin, whether state is ground, and any other information that can be associated
@@ -24,6 +26,9 @@ class MCSpectrum:
                 - origin: str --- name of the file from which the peak originates;
 
         states: MCStates object
+
+    TODO: use pd.MultiIndex to distinguish between different properties
+    TODO: try using SOURCE_COL, INITIAL_STATE_COL, and FINAL_STATE_COL as index in df
     """
     __slots__ = [
         'df',
@@ -119,8 +124,8 @@ class MCSpectrum:
 
         self.update_properties(df, replace=replace)
 
-    def extend(self, other: 'MCSpectrum') -> NoReturn:
-        alignment = get_state_alignment(self.states, other.states)
+    def extend(self, other: 'MCSpectrum', **alignment_kwargs) -> NoReturn:
+        alignment = get_state_alignment(self.states, other.states, **alignment_kwargs)
         self.states.merge(other.states, alignment)
 
         similar_peaks = self.find_similar(other, alignment=alignment)
@@ -150,7 +155,7 @@ class MCSpectrum:
 
         # Since some of the other's are not transferred into self.states we use for mapped states to set i
         missed_idx = df[df[self.INITIAL_COL].isna()].index
-        alignment = get_state_alignment(self.states, other.states)
+        alignment = get_state_alignment(self.states, other.states, **alignment_kwargs)
         state_map = get_state_map_from_alignment(alignment, target='left')
 
         state_map = pd.concat([
@@ -224,7 +229,7 @@ class MCSpectrum:
         self.df.update(new_df[list(previous_cols)])
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], **kwargs) -> 'MCSpectrum':
+    def from_dict(cls, data: dict[str, Any], /, **kwargs) -> 'MCSpectrum':
         data.update(kwargs)
 
         peaks = data.pop('df_peaks')
@@ -239,11 +244,38 @@ class MCSpectrum:
         )
 
     @classmethod
-    def from_spectra(cls, spectra: list['MCSpectrum']) -> 'MCSpectrum':
+    def from_spectra(cls, spectra: list['MCSpectrum'], /, **kwargs) -> 'MCSpectrum':
+        spectra = sorted(spectra, key=lambda s: np.mean(s.energy_range))
+
         base_spec = copy.deepcopy(spectra[0])
         for spec in spectra[1:]:
-            base_spec.extend(spec)
+            base_spec.extend(spec, **kwargs)
+
         return base_spec
+
+    @property
+    def min_energy(self) -> np.float64:
+        return self.df[self.DE_COL].min()
+
+    @property
+    def max_energy(self) -> np.float64:
+        return self.df[self.DE_COL].max()
+
+    @property
+    def energy_range(self) -> tuple[np.float64, np.float64]:
+        return self.min_energy, self.max_energy
+
+    @property
+    def space(self) -> MCSpace:
+        return self.states.space
+
+    def __repr__(self) -> str:
+        emin, emax = self.energy_range
+        energy_str = f'E=[{emin:>11.6f}, {emax:>11.6f}]'
+        return f'{self.__class__.__name__}({energy_str}, #peaks={len(self):>6,d})'
+
+    def __len__(self) -> int:
+        return len(self.df)
 
 
 if __name__ == '__main__':

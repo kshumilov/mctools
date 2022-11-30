@@ -87,18 +87,23 @@ class MCSpace:
 
         return pd.DataFrame(pop, columns=mo_labels)
 
-    def partition_ci_vec(self, ci_vec: sparse.csr_array) -> pd.DataFrame:
+    def partition_ci_vec(self, ci_vec: sparse.csr_array,
+                         coefficient_col: str = 'C', state_col: str = 'state',
+                         address_col: str = 'addr', config_class_col: str = 'config_class',
+                         unmapped_class: str = 'rest') -> pd.DataFrame:
         addrs = np.unique(ci_vec.indices)
         lookup = self.get_address_class_lookup(addrs)
 
         df = pd.DataFrame({
-            'C': np.abs(ci_vec.data) ** 2,
-            'state': np.digitize(np.arange(ci_vec.data.shape[0]), ci_vec.indptr) - 1,
-            'config_class': lookup.get(ci_vec.indices.astype(np.uint64), 'Rest')
+            coefficient_col: np.abs(ci_vec.data) ** 2,
+            state_col: np.digitize(np.arange(ci_vec.data.shape[0]), ci_vec.indptr) - 1,
+            address_col: ci_vec.indices.astype(np.uint64),
         })
 
+        df[config_class_col] = df[address_col].map(lookup).fillna(unmapped_class)
+
         result = df.pivot_table(
-            index='state', columns='config_class', values='C',
+            index=state_col, columns=config_class_col, values=coefficient_col,
             aggfunc=np.sum, fill_value=0
         )
 
@@ -110,6 +115,9 @@ class MCSpace:
         return pd.Series(data=labels, index=addrs[assigned].astype(np.uint64))
 
     def get_config_class(self, config: ConfigArray) -> tuple[np.ndarray, np.ndarray]:
+        if self._config_classes is None:
+            raise ValueError('Set config classes first.')
+
         occ = self.partition_config(config)
         assignments = (occ[..., np.newaxis, :] == self._config_classes).all(axis=-1)
         idx, categories = np.where(assignments)
@@ -130,7 +138,7 @@ class MCSpace:
         self._mo_block_labels = tuple(self._mo_blocks)
 
         offsets = self.graph.get_mo_offsets()
-        self._mo_masks = np.zeros((self.n_blocks, self.n_ras), dtype=np.int64)
+        self._mo_masks = np.zeros((self.n_blocks, self.n_spaces), dtype=np.int64)
         for mo_block_idx, (label, occ_list) in enumerate(self._mo_blocks.items()):
             mask = self._mo_masks[mo_block_idx]
             for mo_idx in tuple(sorted(occ_list)):
@@ -198,7 +206,7 @@ class MCSpace:
         return self.graph.n_configs
 
     @property
-    def n_ras(self) -> int:
+    def n_spaces(self) -> int:
         return self.graph.n_spaces
 
     @property
