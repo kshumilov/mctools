@@ -1,5 +1,6 @@
 import copy
 import warnings
+from itertools import product
 from typing import Any, NoReturn
 
 import numpy as np
@@ -90,6 +91,32 @@ class MCSpectrum:
 
     def analyze(self) -> NoReturn:
         self.states.analyze()
+        pdm_cols = list(self.space.mo_block_labels)
+
+        dfs = self.df[self.DEFAULT_COLS].merge(
+            self.states.df[self.states.IDX_COLS + pdm_cols].reset_index(), how='left',
+            right_on=[self.states.STATE_COL, self.states.SOURCE_COL],
+            left_on=[self.INITIAL_STATE_COL, self.SOURCE_COL], copy=True,
+        ).drop(columns=self.states.STATE_COL).rename(columns={
+            self.states.IDX_NAME: self.INITIAL_COL,
+            **{c: f'{c}_i' for c in pdm_cols}
+        })
+
+        dfs = dfs.merge(
+            self.states.df[self.states.COLS + pdm_cols].reset_index(), how='left',
+            right_on=[self.states.IDX_NAME, self.states.SOURCE_COL],
+            left_on=[self.FINAL_STATE_COL, self.SOURCE_COL], copy=True,
+        ).drop(columns=self.states.STATE_COL).rename(columns={
+            self.states.IDX_NAME: self.FINAL_COL,
+            **{c: f'{c}_f' for c in pdm_cols}
+        })
+
+        for col in pdm_cols:
+            dfs[col] = dfs[f'{col}_f'] - dfs[f'{col}_i']
+
+        dfs.drop(columns=[f'{col}_{suff}' for col, suff in product(pdm_cols, ['i', 'f'])], inplace=True)
+
+        self.update_properties(dfs, replace=True)
 
     def _calculate_peak_energy(self, save: bool = True, replace: bool = True) -> pd.DataFrame | None:
         if self.DE_COL in self.df:

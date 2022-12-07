@@ -261,18 +261,16 @@ class MCSpace:
         data.update(kwargs)
 
         return cls.from_space_spec(
-            ras=data.pop('ras'),
-            elec=data.pop('elec'),
-            max_hole=data.pop('max_hole'),
-            max_elec=data.pop('max_elec'),
+            data.pop('ras'), data.pop('elec'), data.pop('max_hole'), data.pop('max_elec'),
             mo_blocks=data.pop('mo_blocks', None),
             config_classes=data.pop('config_classes', None),
+            use_python_int=data.pop('use_python_int', None),
         )
 
     @classmethod
     def from_space_spec(cls, ras: RASMOs | tuple[int, int, int] | list[int] | int,
-                        elec: Electrons | tuple[int, int] | list[int] | int,
-                        max_hole: int, max_elec: int, **kwargs) -> 'MCSpace':
+                        elec: Electrons | tuple[int, int] | list[int] | int, /,
+                        max_hole: int = 0, max_elec: int = 0,  **kwargs) -> 'MCSpace':
         match ras:
             case int(cas):
                 ras = RASMOs(0, cas, 0)
@@ -289,7 +287,11 @@ class MCSpace:
             case _:
                 raise ValueError('Incorrect Electrons')
 
-        graph = RASGraph(ras, elec, max_hole, max_elec)
+        graph_kwargs = {k: kwargs.pop(k)
+                        for k in ['reverse', 'cat_order', 'use_python_int']
+                        if k in kwargs}
+
+        graph = RASGraph(ras, elec, max_hole, max_elec, **graph_kwargs)
         return cls(graph, **kwargs)
 
     def __repr__(self) -> str:

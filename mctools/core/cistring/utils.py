@@ -26,11 +26,11 @@ AddrArray = npt.NDArray[np.uint64]
 ConfigArray = npt.NDArray[np.int64]
 
 
-def get_num_configs(n_orb: int, n_elec: int) -> int:
+def get_num_configs(n_orb: int, n_elec: int, /) -> int:
     return comb(n_orb, min(n_orb, n_elec), exact=True)
 
 
-def get_configs_reverse(n_orb: int, n_elec: int) -> list[int]:
+def get_configs_reverse(n_orb: int, n_elec: int, /) -> list[int]:
     """Recursively builds the list of configurations for CAS(#e, #o)
     in reversed lexicographical order.
 
@@ -60,7 +60,7 @@ def get_configs_reverse(n_orb: int, n_elec: int) -> list[int]:
     return res
 
 
-def get_configs_direct(n_orb: int, n_elec: int) -> list[int]:
+def get_configs_direct(n_orb: int, n_elec: int, /) -> list[int]:
     # TODO: use Numba or Cython to optimize
     if n_elec == 1:
         res = [(1 << o) for o in range(n_orb)]
@@ -76,8 +76,8 @@ def get_configs_direct(n_orb: int, n_elec: int) -> list[int]:
     return res
 
 
-def get_elec_count(config: npt.ArrayLike) -> npt.NDArray[np.uint64]:
-    config = np.asarray(config, dtype=np.int64).copy()
+def get_elec_count(config: npt.ArrayLike, /, *, config_dtype: npt.DTypeLike = np.int64) -> npt.NDArray[np.uint64]:
+    config = np.asarray(config, dtype=config_dtype).copy()
 
     count = np.zeros_like(config, dtype=np.uint64)
     while (idx := config > 0).any():
@@ -87,8 +87,9 @@ def get_elec_count(config: npt.ArrayLike) -> npt.NDArray[np.uint64]:
     return count
 
 
-def get_config_repr(config: npt.ArrayLike, spaces: tuple[int, ...]) -> npt.NDArray[np.unicode]:
-    config = np.asarray(config, dtype=np.int64).reshape(-1, len(spaces))
+def get_config_repr(config: npt.ArrayLike, spaces: tuple[int, ...], /, *,
+                    config_dtype: npt.DTypeLike = np.int64) -> npt.NDArray[np.str_]:
+    config = np.asarray(config, dtype=config_dtype).reshape(-1, len(spaces))
 
     def to_str(config_: npt.NDArray[np.unicode]) -> str:
         return ' '.join([np.binary_repr(c, width=n)[::-1] for c, n in zip(config_, spaces)])

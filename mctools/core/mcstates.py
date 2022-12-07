@@ -55,7 +55,7 @@ class MCStates:
     STATE_COL = 'state'
     SOURCE_COL = 'source'
 
-    COLS = [E_COL, STATE_COL, SOURCE_COL]
+    COLS = [STATE_COL, SOURCE_COL, E_COL]
     IDX_COLS = [STATE_COL, SOURCE_COL]
 
     df: pd.DataFrame
