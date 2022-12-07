@@ -54,6 +54,7 @@ class MCStates:
     E_COL = 'E'
     STATE_COL = 'state'
     SOURCE_COL = 'source'
+    RESOURCE_COL = 'resource_idx'  # index of related resource in ci_vecs and pdm_diag
 
     COLS = [STATE_COL, SOURCE_COL, E_COL]
     IDX_COLS = [STATE_COL, SOURCE_COL]
@@ -67,16 +68,12 @@ class MCStates:
     # Used for implicit sorting of pdm_diag and ci_vec
     _state_map: np.ndarray
 
-    # Columns on the df that have been computed
-    # _mo_block_labels: set[str] = field(repr=False, default_factory=set)
-    # _config_class_labels: set[str] = field(repr=False, default_factory=set)
-
     def __init__(self,
                  states: pd.DataFrame,
                  ci_vecs: sparse.csr_array | sparse.lil_array | sparse.coo_array,
-                 pdm_diag: np.ndarray,
+                 pdm_diag: np.ndarray, /,
                  source: str = '',
-                 space: MCSpace | None = None,
+                 space: MCSpace | None = None, *,
                  sort_states: bool = False):
 
         if not (ci_vecs.ndim == pdm_diag.ndim == states.ndim == 2):
@@ -109,6 +106,7 @@ class MCStates:
 
         self.space = space
         self._state_map = np.arange(len(self))
+        self.df['resource_idx'] = self._state_map
 
         if sort_states:
             self.sort(self.E_COL)
@@ -137,7 +135,7 @@ class MCStates:
 
         return idx[selected]
 
-    def analyze(self, idx: npt.ArrayLike | None = None, cond: Selector | None = None,
+    def analyze(self, idx: npt.ArrayLike | None = None, cond: Selector | None = None, *,
                 save: bool = True, replace: bool = False, **kwargs) -> pd.DataFrame | None:
         self.clear_properties()
 
@@ -155,7 +153,7 @@ class MCStates:
         if not save:
             return pd.concat([self.df[self.E_COL], *dfs], axis=1)
 
-    def partition_pdm_diag(self, idx: npt.ArrayLike | None = None, cond: Selector | None = None,
+    def partition_pdm_diag(self, idx: npt.ArrayLike | None = None, cond: Selector | None = None, *,
                            save: bool = True, replace: bool = False, **kwargs) -> pd.DataFrame | None:
         if self.space is None:
             raise ValueError('Set MCSpace first')
@@ -169,7 +167,7 @@ class MCStates:
 
         self.update_properties(df, replace=replace)
 
-    def partition_ci_vec(self, idx: npt.ArrayLike | None = None, cond: Selector | None = None,
+    def partition_ci_vec(self, idx: npt.ArrayLike | None = None, cond: Selector | None = None, *,
                          save: bool = True, replace: bool = False, **kwargs) -> pd.DataFrame | None:
         if self.space is None:
             raise ValueError('Set MCSpace first')
@@ -211,7 +209,7 @@ class MCStates:
 
         self.update_properties(df, replace=replace)
 
-    def find_similar(self, other: 'MCStates', ignore_space: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    def find_similar(self, other: 'MCStates', /, ignore_space: bool = False) -> tuple[np.ndarray, np.ndarray]:
         if not ignore_space and (self.space is None or other.space is None):
             warnings.warn('At least one of MCStates does not have well defined MCSpace, proceed with caution')
 
@@ -239,6 +237,7 @@ class MCStates:
                 case None, slice():
                     *_, sl = region
                     self.extend(other[sl], ignore_space=ignore_space, reset_index=False)
+
                 case slice(), slice():
                     sl1, sl2 = region
                     if strategy == 'overwrite':
@@ -271,7 +270,7 @@ class MCStates:
 
         # Update state map
         new_state_map = np.arange(len(self) + len(other))
-        new_state_map[:len(self)] = self._state_map
+        new_state_map[:len(self)] = self._state_map + len(self)  # FIXME: might be a bug here
         self._state_map = new_state_map
 
         # Extend df
@@ -289,7 +288,7 @@ class MCStates:
             self.ci_vecs.indices = addr_map.get(self.ci_vecs.indices).values
 
         # Remove old config label classes
-        cols = [l for l in self.space._config_class_labels if l in self.df]
+        cols = [label for label in self.space.config_class_labels if label in self.df]
         self.df.drop(columns=cols, inplace=True)
 
         # Update the space
@@ -336,7 +335,7 @@ class MCStates:
 
         data['config_repr'] = self.space.graph.get_config_repr(configs)
 
-        if self.space._config_class_labels is not None:
+        if len(self.space.config_class_labels):
             addrs = np.unique(data['addr'])
             lookup = self.space.get_address_class_lookup(addrs)
             data['config_class'] = np.vectorize(lambda i: lookup.get(i, ''))(data['addr'])
@@ -402,7 +401,7 @@ class MCStates:
 
         key = self._validate_key(key)
         if (n := len(self.df.iloc[key])) != len(other):
-            raise ValueError(f'trying to set {n} states, while len(new_states) = {len(other)}')
+            raise IndexError(f'trying to set {n} states, while len(new_states) = {len(other)}')
 
         # FIXME: don't clear calculated data
         self.clear_properties()
@@ -455,11 +454,11 @@ class MCStates:
 
         E = self.df.loc[idx, self.E_COL] - (self.min_energy and shift_ground)
 
-        mo_block_labels = [m for m in self.space._mo_block_labels if m in self.df] if include_mo else []
+        mo_block_labels = [m for m in self.space.mo_block_labels if m in self.df] if include_mo else []
         df_pdm = self.df.loc[idx, mo_block_labels].apply(
             lambda r: '+'.join([f'{l}({v:>5.2f})' for l, v in r.items()]), axis=1)
 
-        config_class_labels = [c for c in self.space._config_class_labels if c in self.df] if include_config_class else []
+        config_class_labels = [c for c in self.space.config_class_labels if c in self.df] if include_config_class else []
         df_config_class = self.df.loc[idx, config_class_labels].apply(
             lambda r: '+'.join([f'{l}({v:7.3%})' for l, v in r.items()]), axis=1)
 
@@ -563,21 +562,6 @@ if __name__ == '__main__':
     data1 = parse_gdvlog(gdvlog1, l910_parser_funcs, n_ground=14)
     states1 = MCStates.from_dict(data1, space=space1)
 
-    space2_filename = os.path.join(data_dir, 'rasci_2.space.json')
-    gdvlog2 = os.path.join(data_dir, 'rasci_2.log')
-
-    space2 = MCSpace.from_json(space2_filename)
-    data2 = parse_gdvlog(gdvlog2, l910_parser_funcs, n_ground=14)
-    states2 = MCStates.from_dict(data2, space=space2)
-
-    mask = (((1 << 4) - 1) << 8) | 3
-
-    def transform(configs):
-        configs[..., 0] <<= 2
-        configs[..., 0] |= mask
-
-    states2.update_space(space1, transform=transform)
-
     # df_example = pd.read_csv(os.path.join(data_dir, 'states.csv'), index_col='state')
     # ci_vec_example = sparse.csr_array(sparse.load_npz(os.path.join(data_dir, 'ci_vecs_small.npz')), copy=True)
     # pdm_diags_example = data['pdm_diags']
@@ -600,3 +584,18 @@ if __name__ == '__main__':
     #
     # print(s1.df)
     # print(align_states(s1, s5))
+
+    # space2_filename = os.path.join(data_dir, 'rasci_2.space.json')
+    # gdvlog2 = os.path.join(data_dir, 'rasci_2.log')
+    #
+    # space2 = MCSpace.from_json(space2_filename)
+    # data2 = parse_gdvlog(gdvlog2, l910_parser_funcs, n_ground=14)
+    # states2 = MCStates.from_dict(data2, space=space2)
+    #
+    # mask = (((1 << 4) - 1) << 8) | 3
+
+    # def transform(configs):
+    #     configs[..., 0] <<= 2
+    #     configs[..., 0] |= mask
+    #
+    # states2.update_space(space1, transform=transform)

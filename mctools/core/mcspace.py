@@ -1,5 +1,6 @@
 import json
-from typing import NoReturn, Callable, IO, Any
+import warnings
+from typing import NoReturn, Callable, IO, Any, Literal, Sequence
 
 import numpy as np
 import pandas as pd
@@ -10,17 +11,8 @@ from .cistring.utils import ConfigArray, get_elec_count
 
 __all__ = [
     'MCSpace',
-
-    'MOBlock', 'MOBlocks',
-    'ConfigClass', 'ConfigClasses',
     'ConfigTransform'
 ]
-
-
-MOBlock = list[int | tuple[int, int]] | tuple[int, ...]
-MOBlocks = dict[str, MOBlock]
-ConfigClass = dict[str, int]
-ConfigClasses = dict[str, ConfigClass]
 
 ConfigTransform = Callable[[ConfigArray], NoReturn]
 
@@ -28,66 +20,71 @@ ConfigTransform = Callable[[ConfigArray], NoReturn]
 class MCSpace:
     """Active Space Definition and other info
 
-    TODO: repackage mo_blocks and config_classes into a pd.DataFrame
-    TODO: rewrite conversion using hdf5 format
+    Attributes:
+        graph: RASGraph instance --- provides CI string manipulation routines
+        df: pd.DataFrame --- stores definitions of MOBlocks and ConfigClasses
+
+
+    TODO: rewrite file saving using hdf5 format
     TODO: save config_class lookup
     """
     __slots__ = [
         'graph',
-        '_mo_blocks', '_mo_block_labels', '_mo_masks',
-        '_config_classes', '_config_class_labels'
+        'df',
     ]
 
-    # mo: MOs  # (# inactive MOs, # active MOs, # Virtual MOs)
-    # elec: Electrons
+    # Useful typing definitions
+    MOBlock = Sequence[int | tuple[int, int] | tuple[int, ...]] | tuple[int, ...]
+    RawMOBlocks = dict[str, MOBlock]
+    MOBlocks = pd.Series
+
+    ConfigClass = dict[str, int]
+    ConfigClasses = dict[str, ConfigClass]
+
     graph: RASGraph
+    df: pd.DataFrame | None
 
-    _mo_blocks: MOBlocks | None
-    _mo_block_labels: tuple[str, ...] | None
-    _mo_masks: np.ndarray | None
+    MO_OCC_COL = 'mo_occ'
+    MO_MASK_COL = 'mo_mask'
+    MO_ORB_COL = 'mo_orb'
+    MO_N_ORB_COL = 'mo_n_orb'
+    MO_N_ELEC_COL = 'mo_n_elec'
+    MO_BLOCK_IDX_NAME = 'block'
 
-    _config_classes: np.ndarray | None
-    _config_class_labels: np.ndarray | None
-    _config_class_lookup: pd.Series
+    CONFIG_CLASS_COL = 'config_class'
 
-    def __init__(self, graph: RASGraph, mo_blocks: MOBlocks | None = None, config_classes: ConfigClasses | None = None):
+    def __init__(self, graph: RASGraph, /, df: pd.DataFrame | None = None, *,
+                 mo_blocks: RawMOBlocks | None = None,
+                 config_classes: ConfigClasses | None = None):
         self.graph = graph
+        self.df = df if df else None
 
-        self._mo_blocks: MOBlocks | None = None
-        self._mo_block_labels: tuple[str, ...] | None = None
-        self._mo_masks: np.ndarray | None = None
-
-        self._config_classes: np.ndarray | None = None
-        self._config_class_labels: np.ndarray | None = None
-
-        if mo_blocks is not None:
-            self.mo_blocks = mo_blocks
+        if df is None and mo_blocks is not None:
+            self.set_mo_blocks(mo_blocks)
 
         if config_classes is not None:
-            self.config_classes = config_classes
+            self.set_config_classes(config_classes)
 
-    def partition_pdm_diag(self, pdm_diag: np.ndarray, mo_labels: list[str] | None = None) -> np.ndarray | pd.DataFrame:
+    def partition_pdm_diag(self, pdm_diag: np.ndarray, /, mo_blocks: list[str] | None = None) -> pd.DataFrame:
         """Partitions PDM diagonal based on user defined spaces.
 
         Parameters:
             pdm_diag: np.ndarray -- must be of the dimensions (#States, #MO)
-            mo_labels: Optional list of MOs to partition on. MO labels that are not in MO Blocks are ignored.
+            mo_blocks: Optional list of MOs to partition on. MO labels that are not in MO Blocks are ignored.
         """
-        pdm_diag = np.asarray(pdm_diag).reshape(-1, self.n_act_mo)
+        if not self.are_mo_blocks_set:
+            raise ValueError('Set MO Blocks first.')
 
-        if mo_labels is None:
-            mo_labels = self._mo_block_labels
+        pdm_diag = np.asarray(pdm_diag)
+
+        if mo_blocks is None:
+            occ_list = self.df[self.MO_OCC_COL]
         else:
-            mo_labels = tuple(mo for mo in mo_labels if mo in self._mo_block_labels)
+            occ_list = self.df.loc[mo_blocks, self.MO_OCC_COL]
 
-        pop = np.zeros((pdm_diag.shape[0], len(mo_labels)))
-        for i, mo in enumerate(mo_labels):
-            occ_list = self._mo_blocks[mo]
-            pop[:, i] = pdm_diag[..., occ_list].sum(axis=1)
+        return occ_list.dot(pdm_diag.T).T
 
-        return pd.DataFrame(pop, columns=mo_labels)
-
-    def partition_ci_vec(self, ci_vec: sparse.csr_array,
+    def partition_ci_vec(self, ci_vec: sparse.csr_array, /,
                          coefficient_col: str = 'C', state_col: str = 'state',
                          address_col: str = 'addr', config_class_col: str = 'config_class',
                          unmapped_class: str = 'rest') -> pd.DataFrame:
@@ -115,91 +112,229 @@ class MCSpace:
         return pd.Series(data=labels, index=addrs[assigned].astype(np.uint64))
 
     def get_config_class(self, config: ConfigArray) -> tuple[np.ndarray, np.ndarray]:
-        if self._config_classes is None:
+        if not self.are_config_classes_set:
             raise ValueError('Set config classes first.')
 
         occ = self.partition_config(config)
-        assignments = (occ[..., np.newaxis, :] == self._config_classes).all(axis=-1)
+        config_classes = self.df[self.CONFIG_CLASS_COL].dropna(axis=0).astype(np.int_).values.T
+        assignments = (occ[..., np.newaxis, :] == config_classes).all(axis=-1)
+
         idx, categories = np.where(assignments)
-        return idx, self._config_class_labels[categories]
+        config_class_labels = np.asarray(self.df[self.CONFIG_CLASS_COL].columns, dtype=np.str_)
+        return idx, config_class_labels[categories]
 
     def partition_config(self, config: ConfigArray) -> np.ndarray:
-        config = np.asarray(config, dtype=np.int64)  # .reshape(-1, self.n_ras)
-        occ = get_elec_count(config[..., np.newaxis, :] & self._mo_masks)
+        if not self.are_config_classes_set:
+            raise ValueError('Set config classes first.')
+
+        config = np.asarray(config, dtype=self.graph.config_dtype).reshape(-1, self.n_spaces)
+        config_classes = self.df.loc[:, [self.CONFIG_CLASS_COL, self.MO_MASK_COL]].dropna(axis=0)
+        masks = config_classes.loc[:, self.MO_MASK_COL].values
+        occ = get_elec_count(config[..., np.newaxis, :] & masks, config_dtype=self.graph.config_dtype)
         return occ.sum(axis=-1)
 
-    @property
-    def mo_blocks(self) -> MOBlocks:
-        return self._mo_blocks
+    def set_mo_blocks(self, raw_blocks: RawMOBlocks, /, replace: bool = True) -> NoReturn:
+        blocks = self.validate_mo_blocks(raw_blocks)
+        new_df = self.transform_mo_blocks(blocks)
 
-    @mo_blocks.setter
-    def mo_blocks(self, mo_blocks: MOBlocks) -> NoReturn:
-        self._mo_blocks = self.validate_mo_blocks(mo_blocks)
-        self._mo_block_labels = tuple(self._mo_blocks)
+        if self.df is None or replace:
+            self.df = new_df
+        else:
+            # Update rows that are already present on the self.df
+            to_update = new_df.index.intersection(self.df.index)
+            self.df.loc[to_update].update(new_df)
 
-        offsets = self.graph.get_mo_offsets()
-        self._mo_masks = np.zeros((self.n_blocks, self.n_spaces), dtype=np.int64)
-        for mo_block_idx, (label, occ_list) in enumerate(self._mo_blocks.items()):
-            mask = self._mo_masks[mo_block_idx]
-            for mo_idx in tuple(sorted(occ_list)):
-                ras_idx = np.searchsorted(offsets, mo_idx, side='right') - 1
-                pos = mo_idx - offsets[ras_idx]
-                mask[ras_idx] |= (1 << pos)
+            # Update rows that are already present on the self.df
+            to_concat = new_df.index.difference(self.df.index)
+            self.df = pd.concat([self.df, new_df.loc[to_concat]], axis=0, copy=True)
 
-        # self.assign_det_state.cache_clear()
-        self._config_classes: np.ndarray | None = None
-        self._config_class_labels: np.ndarray | None = None
+        self.df.sort_index(axis=1, inplace=True)
 
-    def validate_mo_blocks(self, mo_blocks: MOBlocks) -> MOBlocks:
-        for label, mo_block in mo_blocks.items():
+    def validate_mo_blocks(self, blocks: RawMOBlocks, /) -> MOBlocks:
+        """Validates MO blocks and transforms them into pd.Series.
+
+        Assumes that they are provided in the type defined by self.MOBlocks.
+
+        Args:
+            blocks: blocks to be validated. Blocks should be unique.
+
+        Raises:
+            ValueError: if blocks are invalid
+
+        Returns:
+            pd.Series object with index
+        """
+        for label, block in blocks.items():
             # Expand compressed MO spaces as occupation lists
             occ_list: list[int] = []
-            for mo_range in mo_block:
+            for mo_range in block:
                 match mo_range:
                     case [int(start), int(end)]:
-                        assert 0 <= start <= end <= self.n_act_mo
+                        if not (0 <= start <= end <= self.n_act_mo):
+                            raise ValueError(f'MO range {mo_range} in {label} block is invalid: '
+                                             f'indices must be within [0, {self.n_act_mo}]')
                         occ_list.extend(range(start, end))
-                    case int(index):
-                        assert 0 <= index < self.n_act_mo
-                        occ_list.append(index)
-                    case _:
-                        raise AssertionError(f'MO Space {mo_block} is invalid')
 
-            mo_blocks[label] = tuple(occ_list)
-        return mo_blocks
+                    case int(index):
+                        if not (0 <= index < self.n_act_mo):
+                            raise ValueError(f'MO range {mo_range} in {label} block is invalid: '
+                                             f'indices must be within [0, {self.n_act_mo}]')
+                        occ_list.append(index)
+
+                    case [*indices]:
+                        if not all(0 <= i < self.n_act_mo for i in indices):
+                            raise ValueError(f'MO range {mo_range} in {label} block is invalid: '
+                                             f'indices must be within [0, {self.n_act_mo}]')
+                        occ_list.extend(indices)
+
+                    case _:
+                        raise ValueError(f'MO range {mo_range} in {label} block is invalid:'
+                                         f'indices must be integers or tuples of ints')
+
+            blocks[label] = tuple(sorted(occ_list))
+
+        s = pd.Series(blocks, name=self.MO_ORB_COL)
+        s.index.name = self.MO_BLOCK_IDX_NAME
+        return s
+
+    def transform_mo_blocks(self, blocks: MOBlocks, /) -> pd.DataFrame:
+        df_occ = self.get_mo_block_occ(blocks)
+        df_mask = self.get_mo_block_masks(blocks)
+
+        df_orb = blocks.to_frame()
+        df_orb.columns = pd.MultiIndex.from_tuples([(self.MO_ORB_COL, '')])
+
+        df = pd.concat([df_occ, df_mask, df_orb], axis=1)
+
+        # Calculate number of orbitals per each block
+        df[self.MO_N_ORB_COL] = df[self.MO_OCC_COL].sum(axis=1)
+
+        # Calculate number of electrons per each block
+        mo_idx = np.arange(self.n_act_mo)
+        df[self.MO_N_ELEC_COL] = df[self.MO_OCC_COL].apply(lambda x: (mo_idx < self.n_elec_act)[x].sum(), axis=1)
+
+        return df
+
+    def get_mo_block_occ(self, blocks: MOBlocks, /, dtype=np.bool_) -> pd.DataFrame:
+        """Transform blocks into occupation array.
+
+        Parameters:
+            blocks: Assumes that blocks are presented in expanded form and have been validated
+        """
+        occ = np.full((len(blocks), self.n_act_mo), fill_value=False, dtype=dtype)
+
+        for i, occ_list in enumerate(blocks.values):
+            occ[i, occ_list] = True
+
+        cols = pd.MultiIndex.from_product(([self.MO_OCC_COL], np.arange(self.n_act_mo)))
+        return pd.DataFrame(occ, index=blocks.index, columns=cols)
+
+    def get_mo_block_masks(self, blocks: MOBlocks, /) -> pd.DataFrame:
+        """Generates mask for each block that can be applied to configurations to get population of respective block.
+
+        Masks can span across multiple spaces.
+
+        Args:
+            blocks: Assumes that blocks are presented in expanded form and have been validated.
+            dtype: should be an integer type that can fit an entire space. np.int64 is recommended.
+
+        Returns:
+            Array of shape (#blocks, #spaces), where each row corresponds to MO block and column corresponds to
+            a space, as defined in graph.
+        """
+        masks = np.zeros((len(blocks), self.n_spaces), dtype=self.graph.config_dtype)
+
+        offsets = self.graph.get_mo_offsets()
+        for block_idx, mo_orbs in enumerate(blocks.values):
+            mask = masks[block_idx]
+            for mo_idx in mo_orbs:
+                ras_idx = np.searchsorted(offsets, mo_idx, side='right') - 1
+                pos = int(mo_idx - offsets[ras_idx])
+                mask[ras_idx] |= (1 << pos)
+
+        cols = pd.MultiIndex.from_product(([self.MO_MASK_COL], np.arange(self.n_spaces)))
+        return pd.DataFrame(masks, index=blocks.index, columns=cols)
+
+    def set_config_classes(self, raw_classes: ConfigClasses, /,
+                           definition: Literal['occupation', 'change'] = 'occupation',
+                           replace=True) -> NoReturn:
+        if not self.are_mo_blocks_set:
+            raise ValueError('Set MO Blocks first')
+
+        df = self.validate_config_classes(raw_classes, definition=definition)
+
+        if replace:
+            self.df.drop(self.CONFIG_CLASS_COL, axis=1, inplace=True, errors='ignore')
+            self.df = pd.concat([self.df, df], axis=1, copy=True)
+        else:
+            old = self.df.loc[:, (self.CONFIG_CLASS_COL, slice(None))].columns
+            new = df.loc[:, (self.CONFIG_CLASS_COL, slice(None))].columns
+
+            # Update rows that are already present on the self.df
+            to_update = new.intersection(old)
+            self.df.loc[:, to_update].update(df.loc[:, to_update], errors='raise')
+
+            # Update rows that are already present on the self.df
+            to_concat = new.difference(old)
+            self.df = pd.concat([self.df, df.loc[:, to_concat]], axis=1, copy=True)
+
+    def validate_config_classes(self, classes: ConfigClasses, /,
+                                definition: Literal['occupation', 'change'] = 'occupation',
+                                defaults: bool = True) -> pd.DataFrame:
+        """Validates Configuration Classes and transforms them into occupation based definition"""
+        # Convert to dataframe, blocks that are not defined in self.df.index are ignored
+        if defaults:
+            df = pd.DataFrame(classes, index=self.df.index).transpose()
+        else:
+            raise NotImplementedError('Non-default behaviour for config classes is not yet implemented.')
+
+        df = df.astype(np.float_, errors='raise')  # Convert to float, if raise error on failure
+
+        if definition == 'change':
+            df.fillna(0, downcast='infer', inplace=True)
+            df += df[self.MO_N_ELEC_COL]
+        elif definition != 'occupation':
+            raise ValueError("invalid 'definition': can only be 'occupation' or 'change'")
+
+        df.fillna(self.df[self.MO_N_ELEC_COL], downcast='infer', inplace=True)
+        if (invalid_idx := df.sum(axis=1) != self.n_elec_act).any():
+            warnings.warn('Provided classes have invalid MO blocks, dropping them...', RuntimeWarning)
+            df.drop(df.index[invalid_idx], axis=0, inplace=True)
+
+        if len(df.index) == 0:
+            warnings.warn('No valid config classes found', RuntimeWarning)
+
+        df = df.transpose()
+        df.columns = pd.MultiIndex.from_product(([self.CONFIG_CLASS_COL], df.columns))
+        return df
+
+    @property
+    def mo_blocks(self) -> RawMOBlocks:
+        return self.df[self.MO_ORB_COL].to_dict()
+
+    @mo_blocks.setter
+    def mo_blocks(self, mo_blocks: RawMOBlocks) -> NoReturn:
+        self.set_mo_blocks(mo_blocks, replace=True)
+
+    @property
+    def are_mo_blocks_set(self) -> bool:
+        return self.df is not None and len(self.df.index) > 0
 
     @property
     def config_classes(self) -> ConfigClasses:
-        det_categories = {}
-        for idx, category in enumerate(self._config_classes):
-            det_categories[self._config_class_labels[idx]] = {
-                self._mo_block_labels[i]: int(cnt) for i, cnt in enumerate(category)
-            }
-        return det_categories
+        if self.CONFIG_CLASS_COL in self.df:
+            return self.df[self.CONFIG_CLASS_COL].to_dict()
+        return {}
 
     @config_classes.setter
     def config_classes(self, config_classes: ConfigClasses) -> NoReturn:
-        if not self._mo_blocks:
-            raise ValueError("Set 'mo_blocks' first")
+        self.set_config_classes(config_classes, definition='occupation', replace=True)
 
-        config_classes = self.validate_config_classes(config_classes)
-
-        self._config_class_labels = np.asarray(list(config_classes.keys()))
-        n_config_classes = len(self._config_class_labels)
-
-        self._config_classes = np.zeros((n_config_classes, self.n_blocks), dtype=np.int64)
-        for idx, config_class in enumerate(config_classes.values()):
-            self._config_classes[idx] = tuple(config_class.get(label, 0) for label in self._mo_block_labels)
-
-    def validate_config_classes(self, config_classes: ConfigClasses) -> ConfigClasses:
-        for class_label, config_class in config_classes.items():
-            assert sum(config_class.values()) == self.n_elec_act
-
-            for mo_space, mo_cnt in config_class.items():
-                assert 0 <= mo_cnt
-                assert mo_space in self.mo_blocks
-
-        return config_classes
+    @property
+    def are_config_classes_set(self) -> bool:
+        return self.are_mo_blocks_set and \
+               self.CONFIG_CLASS_COL in self.df and \
+               len(self.df[self.CONFIG_CLASS_COL].columns) > 0
 
     @property
     def n_configs(self) -> int:
@@ -219,7 +354,23 @@ class MCSpace:
 
     @property
     def n_blocks(self) -> int:
-        return len(self._mo_blocks)
+        return len(self.df.index)
+
+    @property
+    def mo_block_labels(self) -> np.ndarray:
+        if self.df is None:
+            labels = []
+        else:
+            labels = self.df.index
+        return np.asarray(labels, dtype=np.str_)
+
+    @property
+    def config_class_labels(self) -> np.ndarray:
+        if self.df is None:
+            labels = []
+        else:
+            labels = self.df[self.CONFIG_CLASS_COL].columns if self.CONFIG_CLASS_COL in self.df else []
+        return np.asarray(labels, dtype=np.str_)
 
     def to_dict(self) -> dict:
         return dict(
@@ -228,7 +379,7 @@ class MCSpace:
             max_hole=self.graph.max_hole,
             max_elec=self.graph.max_elec,
             mo_blocks=self.mo_blocks,
-            config_classes=self.config_classes
+            config_classes=self.config_classes,
         )
 
     def to_json(self, fp: str | IO, **kwargs) -> NoReturn:
@@ -299,19 +450,7 @@ class MCSpace:
         return f'{self.__class__.__name__}([{ras_spec}])'
 
     def __eq__(self, other: 'MCSpace') -> bool:
-        if self.graph != other.graph:
-            return False
-
-        if self._mo_blocks:
-            if tuple(self._mo_blocks.items()) != tuple(other._mo_blocks.items()):
-                return False
-
-        if self._config_classes:
-            if not (np.allclose(self._config_classes, other._config_classes) and
-                    (self._config_class_labels == other._config_class_labels).all()):
-                return False
-
-        return True
+        return self.graph == other.graph  # and self.df.equals(other.df)
 
 
 def extend_ras1_factory(n: int) -> ConfigTransform:
@@ -346,10 +485,6 @@ if __name__ == '__main__':
     )
 
     space.to_json(os.path.join(data_dir, 'rasci_1.space.json'))
-
-    npz_archive = np.load(os.path.join(data_dir, 'example.npz'))
-    pdm_diags = npz_archive['pdm_diags']
-    df_pdm = space.partition_pdm_diag(pdm_diags)
 
     other = MCSpace.from_space_spec(
         RASMOs(6, 14, 10),
