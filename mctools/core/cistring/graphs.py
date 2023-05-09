@@ -59,6 +59,7 @@ class SimpleGraph:
                  reverse: bool = False, use_python_int: bool = False):
         if use_python_int:
             warnings.warn('Using python int as config data type, expect slow performance', RuntimeWarning)
+
             self.config_dtype = np.dtype(object)
             self.max_orb = np.inf
         else:
@@ -69,8 +70,8 @@ class SimpleGraph:
             raise ValueError(f'{self.__class__.__name__} is unable to support space with {n_orb} orbitals. '
                              f'Current maximum is {self.max_orb} orbitals.')
 
-        if not (n_orb >= n_elec >= 0):
-            raise ValueError('Invalid definition of active space')
+        if not self.is_valid_space(n_orb, n_elec):
+            raise ValueError(f'Invalid definition of active space: ({n_elec}e|{n_orb}o)')
 
         self.n_orb = n_orb
         self.n_elec = n_elec
@@ -234,6 +235,10 @@ class SimpleGraph:
                self.reverse == other.reverse and \
                self.config_dtype == other.config_dtype
 
+    @staticmethod
+    def is_valid_space(n_orb: int, n_elec: int) -> bool:
+        return n_orb >= n_elec >= 0
+
     def print_weights(self) -> NoReturn:
         # TODO: correctly implement printing of weights
         raise NotImplementedError()
@@ -326,14 +331,17 @@ class RASGraph:
         else:
             self.config_dtype = np.dtype(np.int64)
 
-        self._build_graph(reverse=reverse, use_python_int=use_python_int)
+        self.build_graph(reverse=reverse, use_python_int=use_python_int)
 
-    def _build_graph(self, reverse: bool = False, use_python_int: bool = False) -> NoReturn:
+    def build_graph(self, reverse: bool = False, use_python_int: bool = False) -> NoReturn:
         # Find valid categories
-        cat_map = defaultdict(lambda: -1)
+        cat_map: dict[tuple[int, int]] = defaultdict(lambda: -1)
         for r3_ne, r1_nh in product(range(self.max_elec + 1), range(self.max_hole + 1)):
             r1_ne = self.spaces.r1 - r1_nh
-            if (r2_ne := self.n_elec - (r1_ne + r3_ne)) >= 0:
+            r2_ne = self.n_elec - (r1_ne + r3_ne)
+            occ: tuple[int, int, int] = (r1_ne, r2_ne, r3_ne)
+            if all(SimpleGraph.is_valid_space(n_orb, n_elec)
+                   for n_orb, n_elec in zip(self.spaces, occ)):
                 cat_map[(r1_ne, r3_ne)] = r2_ne
 
         # FIXME: Use numpy fields for category array, maybe use a pd.DataFrame
