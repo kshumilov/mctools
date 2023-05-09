@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Any
 
 import numpy as np
@@ -21,7 +23,7 @@ class Molecule:
         source: str --- filename of the origin
     """
     __slots__ = [
-        "df",
+        "_df",
         "charge", "multiplicity",
         "name", "source",
     ]

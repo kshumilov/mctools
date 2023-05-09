@@ -1,7 +1,6 @@
-import copy
 import warnings
 
-from typing import Any, NoReturn, Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -13,7 +12,7 @@ from .mcstates import MCStates
 # from .utils import get_state_alignment, get_state_map_from_alignment, StateAlignment
 
 __all__ = [
-    'MCPeaks'
+    'MCPeaks',
 ]
 
 
@@ -57,16 +56,17 @@ class MCPeaks(MCBase):
     INIT_COLS = [INITIAL_STATE_COL, FINAL_STATE_COL, OSC_COL]
     DEFAULT_COLS = [INITIAL_STATE_COL, FINAL_STATE_COL, SOURCE_COL, OSC_COL]
 
-    IDX_NAME = 'idx'
+    __slots__ = [
+        'states',
+    ]
 
-    df_: pd.DataFrame
     states: Optional[MCStates]
 
     def __init__(self,
                  df: pd.DataFrame, /,
                  source: str = '',
                  states: Optional[MCStates] = None, *,
-                 sort: bool = False, keep_dark: bool = False) -> NoReturn:
+                 sort: bool = False, keep_dark: bool = False) -> None:
         if self.SOURCE_COL not in df:
             if source:
                 df[self.SOURCE_COL] = source
@@ -85,13 +85,13 @@ class MCPeaks(MCBase):
             self.calculate_peak_energy(save=True, replace=True)
 
         if not keep_dark:
-            self.df_ = self.df_[self.df_[self.OSC_COL] > 0.0].copy()
+            self._df = self._df[self._df[self.OSC_COL] > 0.0].copy()
             self.reset_index()
 
         if sort:
             self.sort(col=self.DE_COL)
 
-    def analyze(self, save: bool = True, replace: bool = False) -> pd.DataFrame | None:
+    def analyze(self: 'MCPeaks', save: bool = True, replace: bool = False) -> pd.DataFrame | None:
         self.clear_properties()
 
         dfs = []
@@ -102,12 +102,13 @@ class MCPeaks(MCBase):
             warnings.warn(err.args[0])
 
         if not save:
-            return pd.concat([self.df_[self.OSC_COL], *dfs], axis=1)
+            return pd.concat([self._df[self.OSC_COL], *dfs], axis=1)
 
-    def get_state_properties(self, props: list[str], save: bool = True, replace: bool = False) -> pd.DataFrame | None:
-        df_states = self.states.df_[self.states.IDX_COLS + props]
+    def get_state_properties(self: 'MCPeaks', props: list[str],
+                             save: bool = True, replace: bool = False) -> pd.DataFrame | None:
+        df_states = self.states.df[self.states.IDX_COLS + props]
 
-        df = self.df_[self.IDX_COLS].merge(
+        df = self._df[self.IDX_COLS].merge(
             df_states, how='left',
             right_on=self.states.IDX_COLS,
             left_on=[self.INITIAL_STATE_COL, self.SOURCE_COL],
@@ -132,10 +133,10 @@ class MCPeaks(MCBase):
 
         self.update_properties(df, replace=replace)
 
-    def calculate_state_idx(self, save: bool = True, replace: bool = False) -> pd.DataFrame | None:
-        df_states = self.states.df_[self.states.IDX_COLS ]
+    def calculate_state_idx(self: 'MCPeaks', save: bool = True, replace: bool = False) -> pd.DataFrame | None:
+        df_states = self.states.df[self.states.IDX_COLS]
 
-        df = self.df_[self.IDX_COLS].merge(
+        df = self._df[self.IDX_COLS].merge(
             df_states, how='left',
             right_on=self.states.IDX_COLS,
             left_on=[self.INITIAL_STATE_COL, self.SOURCE_COL],
@@ -160,7 +161,7 @@ class MCPeaks(MCBase):
 
         self.update_properties(df, replace=replace)
 
-    def calculate_peak_energy(self, save: bool = True, replace: bool = False) -> pd.DataFrame | None:
+    def calculate_peak_energy(self: 'MCPeaks', save: bool = True, replace: bool = False) -> pd.DataFrame | None:
         if not self.are_states_set:
             raise ValueError("'states' attribute must be set to calculate peak energy")
 
@@ -177,12 +178,12 @@ class MCPeaks(MCBase):
 
         self.update_properties(df, replace=replace)
 
-    def calculate_rdm_diag_changes(self, save: bool = True, replace: bool = False) -> pd.DataFrame | None:
+    def calculate_rdm_diag_changes(self: 'MCPeaks', save: bool = True, replace: bool = False) -> pd.DataFrame | None:
         if not self.are_states_set:
             raise ValueError("'states' attribute must be set to calculate RDM diagonal differences")
 
         rdm_cols = list(self.space.mo_block_labels)
-        if any(col not in self.states.df_ for col in rdm_cols):
+        if any(col not in self.states.df for col in rdm_cols):
             raise ValueError("states must have partitioned RDM diagonals")
 
         df = self.get_state_properties(rdm_cols, save=False)
@@ -263,7 +264,7 @@ class MCPeaks(MCBase):
     #     f_map = other.df_[other.FINAL_COL].map(state_map, na_action='ignore')
     #     other_mapped = pd.concat([i_map, f_map], axis=1)
     #
-    #     df = self.df_[[self.INITIAL_COL, self.FINAL_COL]].reset_index().merge(
+    #     df = self._df[[self.INITIAL_COL, self.FINAL_COL]].reset_index().merge(
     #         other_mapped.reset_index(),
     #         how='inner',
     #         left_on=[self.INITIAL_COL, self.FINAL_COL],
@@ -276,7 +277,7 @@ class MCPeaks(MCBase):
     # def filter(self, i_cond: Selector | None = None, f_cond: Selector | None = None) -> pd.DataFrame:
     #     i_idx = self.states.filter(cond=i_cond, label_index=True)
     #     f_idx = self.states.filter(cond=f_cond, label_index=True)
-    #     return self.df_[self.df_[self.INITIAL_COL].isin(i_idx) & self.df_[self.FINAL_COL].isin(f_idx)]
+    #     return self._df[self._df[self.INITIAL_COL].isin(i_idx) & self._df[self.FINAL_COL].isin(f_idx)]
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], /,
@@ -296,34 +297,29 @@ class MCPeaks(MCBase):
             sort=kwargs.get('sort_peaks', True),
         )
 
-    @classmethod
-    def from_spectra(cls, spectra: list['MCPeaks'], /, **kwargs) -> 'MCPeaks':
-        spectra = sorted(spectra, key=lambda s: np.mean(s.energy_range))
-
-        base_spec = copy.deepcopy(spectra[0])
-        for spec in spectra[1:]:
-            base_spec.extend(spec, **kwargs)
-
-        return base_spec
+    # @classmethod
+    # def from_spectra(cls, spectra: list['MCPeaks'], /, **kwargs) -> 'MCPeaks':
+    #     spectra = sorted(spectra, key=lambda s: np.mean(s.energy_range))
+    #
+    #     base_spec = copy.deepcopy(spectra[0])
+    #     for spec in spectra[1:]:
+    #         base_spec.extend(spec, **kwargs)
+    #
+    #     return base_spec
 
     @property
-    def df(self) -> pd.DataFrame:
-        return self.df_
-
-    @df.setter
-    def df(self, new_df: pd.DataFrame) -> NoReturn:
-        for col in self.DEFAULT_COLS:
-            if col not in new_df:
-                raise ValueError(f"'df' must have {col}")
-        self.df_ = new_df
+    def E(self) -> np.ndarray:
+        if self.DE_COL not in self._df:
+            self.calculate_peak_energy(save=True)
+        return self._df[self.DE_COL].values
 
     @property
     def min_energy(self) -> float:
-        return float(self.df_[self.DE_COL].min())
+        return float(self._df[self.DE_COL].min())
 
     @property
     def max_energy(self) -> float:
-        return float(self.df_[self.DE_COL].max())
+        return float(self._df[self.DE_COL].max())
 
     @property
     def energy_range(self) -> tuple[float, float]:
@@ -343,7 +339,7 @@ class MCPeaks(MCBase):
         return f'{self.__class__.__name__}({energy_str}, #peaks={len(self):>6,d})'
 
     def __len__(self) -> int:
-        return len(self.df_)
+        return len(self._df)
 
 
 if __name__ == '__main__':

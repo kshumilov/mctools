@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import abc
 
 from typing import NoReturn, Callable
@@ -22,20 +24,24 @@ class MCBase(abc.ABC):
     IDX_COLS: list[str] = []
     DEFAULT_COLS: list[str] = []
 
-    df_: pd.DataFrame
+    __slots__ = [
+        '_df',
+    ]
+
+    _df: pd.DataFrame
 
     @abc.abstractmethod
-    def analyze(self, idx: npt.ArrayLike | None = None, condition: Selector | None = None,
+    def analyze(self: 'MCBase', idx: npt.ArrayLike | None = None, condition: Selector | None = None,
                 save=True, replace=False) -> pd.DataFrame | None:
         pass
 
-    def sort(self, col: str = '') -> NoReturn:
-        if col in self.df_:
-            self.df_.sort_values(col, ignore_index=True, inplace=True)
+    def sort(self: 'MCBase', col: str = '') -> NoReturn:
+        if col in self._df:
+            self._df.sort_values(col, ignore_index=True, inplace=True)
 
         self.reset_index()
 
-    def filter(self, idx: npt.ArrayLike | None = None, condition: Selector | None = None,
+    def filter(self: 'MCBase', idx: npt.ArrayLike | None = None, condition: Selector | None = None,
                label_index: bool = False) -> np.ndarray | pd.Index:
         """Filter entries on positional integer index and some condition.
 
@@ -57,36 +63,51 @@ class MCBase(abc.ABC):
             TODO: return MCBase object
         """
         idx = np.asarray(idx).reshape(-1) if idx is not None else np.arange(len(self))
-        selected = condition(self.df_.iloc[idx]) if condition else np.s_[...]
+        selected = condition(self._df.iloc[idx]) if condition else np.s_[...]
 
         if label_index:
-            return self.df_.index[selected]
+            return self._df.index[selected]
 
         return idx[selected]
 
-    def update_properties(self, new_df: pd.DataFrame, replace: bool = False) -> NoReturn:
+    @property
+    def df(self: 'MCBase') -> pd.DataFrame:
+        return self._df
+
+    @df.setter
+    def df(self, new_df: pd.DataFrame) -> NoReturn:
+        self._df = self.validate_df(new_df)
+
+    def validate_df(self: 'MCBase', new_df: pd.DataFrame) -> pd.DataFrame:
+        for col in self.DEFAULT_COLS:
+            if col not in new_df:
+                raise ValueError(f"'df' must have {col}")
+
+        return new_df
+
+    def update_properties(self: 'MCBase', new_df: pd.DataFrame, replace: bool = False) -> NoReturn:
         cols = set(new_df.columns)  # Columns on new_df that can be added
         duplicate_cols = cols & self.property_columns  # Columns that exist in both new_df and self.df
 
         if replace:
-            self.df_.drop(columns=duplicate_cols, inplace=True)
+            self._df.drop(columns=list(duplicate_cols), inplace=True)
             duplicate_cols.clear()
 
         new_cols = cols - duplicate_cols
-        self.df_ = pd.concat([self.df_, new_df[list(new_cols)]], axis=1, copy=False)
-        self.df_.update(new_df[list(duplicate_cols)])
+        self._df = pd.concat([self._df, new_df[list(new_cols)]], axis=1, copy=False)
+        self._df.update(new_df[list(duplicate_cols)])
 
-    def clear_properties(self) -> NoReturn:
-        self.df_.drop(columns=self.property_columns, inplace=True)
+    def clear_properties(self: 'MCBase') -> NoReturn:
+        self._df.drop(columns=list(self.property_columns), inplace=True)
 
     @property
-    def property_columns(self) -> set[str]:
+    def property_columns(self: 'MCBase') -> set[str]:
         """Property columns that exist on self.df"""
-        return set(self.df_.columns) - set(self.DEFAULT_COLS)
+        return set(self._df.columns) - set(self.DEFAULT_COLS)
 
-    def reset_index(self) -> NoReturn:
-        self.df_.reset_index(drop=True, inplace=True)
-        self.df_.index.name = self.IDX_NAME
+    def reset_index(self: 'MCBase') -> NoReturn:
+        self._df.reset_index(drop=True, inplace=True)
+        self._df.index.name = self.IDX_NAME
 
-    def __len__(self) -> int:
-        return len(self.df_)
+    def __len__(self: 'MCBase') -> int:
+        return len(self._df)

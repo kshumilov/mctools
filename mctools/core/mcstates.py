@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import warnings
 
 from typing import NoReturn, Callable, Any, TYPE_CHECKING
@@ -32,8 +34,8 @@ class MCStates(MCBase):
         df: Energy (in Eh) of states, and any other information that can be associated
             with a particular state. States are indexed internally by df.index starting from 0, with unique index
             defined by pair of (STATE_COL, SOURCE_COL). df.shape = (#States, #Properties)
-        ci_vec: CI vectors as in Sparse Compressed Row format. ci_vec.shape = (#States, #Determinants)
-        rdm_diag: Diagonals of 1RDM matrices for every state. rdm_diag.shape = (#States, #Active MOs)
+        ci_vecs: CI vectors as in Sparse Compressed Row format. ci_vec.shape = (#States, #Determinants)
+        rdm_diags: Diagonals of 1RDM matrices for every state. rdm_diag.shape = (#States, #Active MOs)
 
     Possible columns on df:
         SOURCE_COL: file from which the state originates;
@@ -52,8 +54,6 @@ class MCStates(MCBase):
         TODO: include duplicate and similar
         TODO: Move _state_map to RESOURCE_COL
     """
-    IDX_NAME = 'idx'
-
     E_COL = 'E'
     DEGENERACY_COL = 'g'
     STATE_COL = 'state'
@@ -62,6 +62,15 @@ class MCStates(MCBase):
 
     DEFAULT_COLS = [STATE_COL, SOURCE_COL, E_COL]  # Permanent property columns for the df
     IDX_COLS = [STATE_COL, SOURCE_COL]  # Columns used to identify the states uniquely
+
+    __slots__ = [
+        'ci_vecs',
+        'rdm_diags',
+
+        'space',
+        'peaks',
+        '_state_map'
+    ]
 
     ci_vecs: sparse.csr_array | sparse.lil_array  # Sparse array of CI vectors
     rdm_diags: np.ndarray
@@ -79,7 +88,7 @@ class MCStates(MCBase):
                  rdm_diags: np.ndarray, /,
                  source: str = '',
                  space: MCSpace | None = None, *,
-                 sort: bool = False) -> NoReturn:
+                 sort: bool = False) -> None:
         if self.SOURCE_COL not in df:
             if source:
                 df[self.SOURCE_COL] = source
@@ -116,9 +125,9 @@ class MCStates(MCBase):
             self.sort(self.E_COL)
 
     def sort(self, col: str = E_COL) -> NoReturn:
-        idx = np.argsort(self.df_[col].values)
+        idx = np.argsort(self._df[col].values)
         self._state_map = self._state_map[idx]
-        self.df_ = self.df_.iloc[idx]
+        self._df = self._df.iloc[idx]
 
         self.reset_index()
         if self.peaks is not None:
@@ -169,7 +178,7 @@ class MCStates(MCBase):
             warnings.warn(err.args[0])
 
         if not save:
-            return pd.concat([self.df_[self.E_COL], *dfs], axis=1)
+            return pd.concat([self._df[self.E_COL], *dfs], axis=1)
 
         if self.peaks is not None:
             self.peaks.analyze(save=True)
@@ -201,7 +210,7 @@ class MCStates(MCBase):
 
         idx = self.filter(idx=idx, condition=condition)
         df = self.space.partition_rdm_diag(self.rdm_diags[self._state_map[idx]])
-        df.set_index(self.df_.index[idx], inplace=True)
+        df.set_index(self._df.index[idx], inplace=True)
 
         if not save:
             return df
@@ -235,7 +244,7 @@ class MCStates(MCBase):
 
         idx = self.filter(idx=idx, condition=condition)
         df = self.space.partition_ci_vec(self.ci_vecs[self._state_map[idx]])
-        df.set_index(self.df_.index[idx], inplace=True)
+        df.set_index(self._df.index[idx], inplace=True)
 
         if not save:
             return df
@@ -272,7 +281,7 @@ class MCStates(MCBase):
 
         idx = self.filter(idx=idx, condition=condition)
         norm = sparse.linalg.norm(self.ci_vecs, axis=1)
-        df = pd.DataFrame({col_name: norm}, index=self.df_.index[idx])
+        df = pd.DataFrame({col_name: norm}, index=self._df.index[idx])
 
         if not save:
             return df
@@ -298,7 +307,7 @@ class MCStates(MCBase):
         """
         idx = self.filter(idx=idx, condition=condition)
 
-        dE = self.df_.loc[self.df_.index[idx], self.E_COL].diff()
+        dE = self._df.loc[self._df.index[idx], self.E_COL].diff()
         dE.fillna(0, inplace=True)
         df = pd.DataFrame({col_name: (dE > tol).cumsum()})
 
@@ -336,18 +345,18 @@ class MCStates(MCBase):
             match region:
                 case None, slice():
                     *_, sl = region
-                    self.extend(other[sl], ignore_space=ignore_space, reset_index=False)
+                    self.append(other[sl], ignore_space=ignore_space, reset_index=False)
 
                 case slice(), slice():
                     sl1, sl2 = region
                     if strategy == 'overwrite':
                         self[sl1] = other[sl2]
                     elif strategy == 'append':
-                        self.extend(other[sl2], ignore_space=ignore_space, reset_index=False)
+                        self.append(other[sl2], ignore_space=ignore_space, reset_index=False)
 
         self.sort(self.E_COL)
 
-    def extend(self, other: 'MCStates', ignore_space: bool = False, reset_index: bool = True) -> NoReturn:
+    def append(self, other: 'MCStates', ignore_space: bool = False, reset_index: bool = True) -> NoReturn:
         """Extends the current MCStates with provided one.
 
         The function does not check for duplicates or overlaps.
@@ -379,7 +388,7 @@ class MCStates(MCBase):
         self._state_map = new_state_map
 
         # Extend df
-        self.df_ = pd.concat([self.df_[self.DEFAULT_COLS], other.df_[self.DEFAULT_COLS]], axis=0, copy=True)
+        self._df = pd.concat([self._df[self.DEFAULT_COLS], other._df[self.DEFAULT_COLS]], axis=0, copy=True)
 
         if self.peaks is not None or other.peaks is not None:
             warnings.warn('MCStates.extend() with peaks assigned is not tested')
@@ -407,8 +416,8 @@ class MCStates(MCBase):
             self.ci_vecs.indices = addr_map.get(self.ci_vecs.indices).values
 
         # Remove old config label classes
-        cols = [label for label in self.space.config_class_labels if label in self.df_]
-        self.df_.drop(columns=cols, inplace=True)
+        cols = [label for label in self.space.config_class_labels if label in self._df]
+        self._df.drop(columns=cols, inplace=True)
 
         # Update the space
         self.space = new_space
@@ -472,7 +481,7 @@ class MCStates(MCBase):
         """
         key = self._validate_key(key)
 
-        new_df: pd.DataFrame = self.df_.iloc[key]
+        new_df: pd.DataFrame = self._df.iloc[key]
 
         new_states = self.__class__(
             new_df.copy(deep=True),
@@ -488,7 +497,7 @@ class MCStates(MCBase):
             temp_df = self.peaks.calculate_state_idx()
             included_initial = temp_df[self.peaks.INITIAL_COL].isin(preserve_key)
             included_final = temp_df[self.peaks.FINAL_COL].isin(preserve_key)
-            new_peaks_df = self.peaks.df_[included_initial & included_final].copy(deep=True)
+            new_peaks_df = self.peaks._df[included_initial & included_final].copy(deep=True)
             new_states.peaks = self.peaks.__class__(new_peaks_df, states=new_states)
 
         return new_states
@@ -517,14 +526,14 @@ class MCStates(MCBase):
             raise NotImplementedError('Index like setting is not implemented in the presence of peaks')
 
         key = self._validate_key(key)
-        if (n := len(self.df_.iloc[key])) != len(other):
+        if (n := len(self._df.iloc[key])) != len(other):
             raise IndexError(f'trying to set {n} states, while len(new_states) = {len(other)}')
 
         # FIXME: don't clear calculated data
         self.clear_properties()
-        self.df_.iloc[key, self.DEFAULT_COLS] = other.df_[self.DEFAULT_COLS]
-        self.df_.reset_index(drop=True, inplace=True)
-        self.df_.index.name = self.IDX_NAME
+        self._df.iloc[key, self.DEFAULT_COLS] = other._df[self.DEFAULT_COLS]
+        self._df.reset_index(drop=True, inplace=True)
+        self._df.index.name = self.IDX_NAME
 
         self.rdm_diags[self._state_map[key]] = other.rdm_diags
 
@@ -536,22 +545,22 @@ class MCStates(MCBase):
     def __delitem__(self, key: int | slice) -> NoReturn:
         key = self._validate_key(key)
 
-        drop_key = self.df_.index[key]
+        drop_key = self._df.index[key]
         if self.peaks is not None:
             warnings.warn('Slicing MCStates with peaks assigned is not tested')
 
             temp_df = self.peaks.calculate_state_idx()
             included_initial = temp_df[self.peaks.INITIAL_COL].isin(drop_key)
             included_final = temp_df[self.peaks.FINAL_COL].isin(drop_key)
-            new_peaks_df = self.peaks.df_[~(included_initial | included_final)].copy(deep=True)
+            new_peaks_df = self.peaks._df[~(included_initial | included_final)].copy(deep=True)
             self.peaks = self.peaks.__class__(new_peaks_df, states=new_peaks_df)
 
-        self.df_.drop(drop_key, inplace=True)
-        preserve_key = self.df_.index.values  # indices of states that are preserved
+        self._df.drop(drop_key, inplace=True)
+        preserve_key = self._df.index.values  # indices of states that are preserved
         left_states = self._state_map[preserve_key]
 
-        self.df_.reset_index(drop=True, inplace=True)
-        self.df_.index.name = self.IDX_NAME
+        self._df.reset_index(drop=True, inplace=True)
+        self._df.index.name = self.IDX_NAME
 
         # TODO: try to use vstack
         found_lil = sparse.isspmatrix_lil(self.ci_vecs)
@@ -581,14 +590,14 @@ class MCStates(MCBase):
 
         idx = self.filter(idx=idx, condition=condition)
 
-        E = self.df_.loc[idx, self.E_COL] - (self.min_energy * shift_ground)
+        E = self._df.loc[idx, self.E_COL] - (self.min_energy * shift_ground)
 
-        mo_block_labels = [m for m in self.space.mo_block_labels if m in self.df_] if include_mo else []
-        df_rdm = self.df_.loc[idx, mo_block_labels].apply(
+        mo_block_labels = [m for m in self.space.mo_block_labels if m in self._df] if include_mo else []
+        df_rdm = self._df.loc[idx, mo_block_labels].apply(
             lambda r: ' + '.join([f'{l}({v:>5.2f})' for l, v in r.items()]), axis=1)
 
-        config_class_labels = [c for c in self.space.config_class_labels if c in self.df_] if include_config_class else []
-        df_config_class = self.df_.loc[idx, config_class_labels].apply(
+        config_class_labels = [c for c in self.space.config_class_labels if c in self._df] if include_config_class else []
+        df_config_class = self._df.loc[idx, config_class_labels].apply(
             lambda r: ' + '.join([f'{l}({v:7.3%})' for l, v in r.items()]), axis=1)
 
         print('=' * BAR_WIDTH)
@@ -629,7 +638,7 @@ class MCStates(MCBase):
                 print(f'{addrs[j]:>6}',
                       config_strs[j],
                       f'C = {coeffs[j]:>13.3f}',
-                      f'|C|^2 = {coeffs_abs[j]:+5.3f}')
+                      f'|C|^2 = {coeffs_abs[j]:>6.3f}')
 
             print('=' * BAR_WIDTH)
 
@@ -667,35 +676,28 @@ class MCStates(MCBase):
 
         return states
 
-    @property
-    def df(self) -> pd.DataFrame:
-        return self.df_
-
-    @df.setter
-    def df(self, new_df: pd.DataFrame) -> NoReturn:
-        for col in self.DEFAULT_COLS:
-            if col not in new_df:
-                raise ValueError(f"'df' must have {col}")
+    def validate_df(self: 'MCStates', new_df: pd.DataFrame) -> pd.DataFrame:
+        new_df = super(MCStates, self).validate_df(new_df)
 
         if not (self.ci_vecs.ndim == self.rdm_diags.ndim == new_df.ndim == 2):
             raise ValueError('df must be 2D')
 
-        self.df_ = new_df
+        return new_df
 
     @property
     def E(self) -> np.ndarray:
-        return self.df_[self.E_COL].values
+        return self._df[self.E_COL].values
 
     @property
-    def min_energy(self) -> np.float64:
-        return np.float64(self.df_[self.E_COL].min())
+    def min_energy(self) -> float:
+        return float(self._df[self.E_COL].min())
 
     @property
-    def max_energy(self) -> np.float64:
-        return np.float64(self.df_[self.E_COL].max())
+    def max_energy(self) -> float:
+        return float(self._df[self.E_COL].max())
 
     @property
-    def energy_range(self) -> tuple[np.float64, np.float64]:
+    def energy_range(self) -> tuple[float, float]:
         return self.min_energy, self.max_energy
 
     def __repr__(self) -> str:
