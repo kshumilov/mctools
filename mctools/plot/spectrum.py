@@ -5,7 +5,7 @@ import numpy as np
 import numpy.typing as npt
 
 
-from ..core import MCSpectrum
+from ..core import MCPeaks
 
 __all__ = [
     'lorentizian',

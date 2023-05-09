@@ -1,9 +1,13 @@
 import warnings
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
 
-from .mcstates import MCStates
+if TYPE_CHECKING:
+    from .mcstates import MCStates
+
 
 StateAlignment = list[tuple[slice | None, slice | None]]
 
@@ -33,6 +37,7 @@ def get_state_alignment(left: MCStates, right: MCStates,
 
     # check if states overlap
     if left.E[-1] < right.E[0] or left.E[0] > right.E[-1]:
+        # States do not overlap energetically
         sl_left = np.s_[np.s_[offset_left:offset_left + len(left)]]
         sl_right = np.s_[np.s_[offset_right:offset_left + len(right)]]
 
@@ -46,9 +51,10 @@ def get_state_alignment(left: MCStates, right: MCStates,
     # Find an approximate location of right[first] in left within window the size of +/- margin
     w_begin = max(0, np.searchsorted(left.E, right.E[0]) - margin)
     w_end = min(w_begin + 2 * margin, len(left))
+    window = np.s_[w_begin:w_end]
 
-    # Find the best overlap in the window
-    idx, overlap = left[w_begin:w_end].find_similar(right[0])
+    # Find the most similar of the state to right[0] in left[window]
+    idx, overlap = left[window].find_similar(right[0])
     if overlap[0] < tol:
         msg = f'Overlap below tolerance: {tol} > {overlap[0]}'
         if ignore_overlap:
@@ -56,7 +62,7 @@ def get_state_alignment(left: MCStates, right: MCStates,
         else:
             raise ValueError(msg)
 
-    # Mark states that present in s1 but not s2
+    # Mark states that present in left but not right
     start_left, start_right = idx[0] + w_begin, 0
     if start_left != start_right:
         sl_left = np.s_[offset_left:offset_left + start_left]
@@ -65,7 +71,8 @@ def get_state_alignment(left: MCStates, right: MCStates,
         else:
             result.append((sl_left, None))
 
-    # Iterate through states one by one to make find the first non-overlapping states
+    # Iterate through states one by one to find the first non-overlapping states
+    state_overlap = [overlap[0]]
     end_left, end_right = start_left + 1, start_right + 1
     while end_left < len(left) and end_right < len(right):
         v1 = left.ci_vecs[[end_left], :]
@@ -75,6 +82,7 @@ def get_state_alignment(left: MCStates, right: MCStates,
         if overlap > tol:
             end_left += 1
             end_right += 1
+            state_overlap.append(overlap)
         else:
             break
 
@@ -91,7 +99,7 @@ def get_state_alignment(left: MCStates, right: MCStates,
         sl_left, sl_right = sl_right, sl_left
         left, right = right, left
 
-    result.append((sl_left, sl_right))
+    result.append((sl_left, sl_right, state_overlap))
 
     # Check if there are states left and recursively search for the next overlap
     if end_left <= len(left) or end_right <= len(right):

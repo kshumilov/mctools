@@ -1,194 +1,278 @@
 import warnings
-from typing import NoReturn, Callable, Any
+
+from typing import NoReturn, Callable, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .mcpeaks import MCPeaks
+    from .mcspace import MCSpace, ConfigTransform
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+
 from scipy import sparse
 
-from .mcspace import MCSpace, ConfigTransform
+from .base import MCBase
 
 
 __all__ = [
     'MCStates',
-    'Selector'
+    'Selector',
 ]
 
 
 Selector = Callable[[pd.DataFrame], bool]
 
 
-class MCStates:
+class MCStates(MCBase):
     """Holds information about multiconfigurational states.
 
     Attributes:
         space: CAS/RAS definition, and related utilities.
         df: Energy (in Eh) of states, and any other information that can be associated
-            with a particular state. Indexed by state id starting from 0. df.shape = (#States, #Properties).
-            df must contain the following columns:
-                - E: np.float64 --- Energy of states in Eh;
-                - origin: str --- name of the file from which the state is coming from;
-                - idx: np.uint32 --- original index of the state in the filename;
+            with a particular state. States are indexed internally by df.index starting from 0, with unique index
+            defined by pair of (STATE_COL, SOURCE_COL). df.shape = (#States, #Properties)
         ci_vec: CI vectors as in Sparse Compressed Row format. ci_vec.shape = (#States, #Determinants)
-        pdm_diag: Diagonals of 1PDM matrices for every state. pdm_diag.shape = (#States, #Active MOs)
+        rdm_diag: Diagonals of 1RDM matrices for every state. rdm_diag.shape = (#States, #Active MOs)
 
-    TODO: add name attribute
-    TODO: Explore LIL sparse structure for manipulation of ci_vec
-    TODO: pd.MultiIndex for permanent cols, MO blocks, config classes, and other computed properties
-    TODO: rewrite assertions as Errors
-    TODO: Adapt to using dense representation of CI vectors
-    TODO: try using STATE_COL and SOURCE_COL as index in df
-    TODO: include duplicate and similar
+    Possible columns on df:
+        SOURCE_COL: file from which the state originates;
+        STATE_COL: index of the state as defined in the `source`;
+        E_COL: Energy of the state in Hartree;
+
+        IDX_COLS: list of columns used to uniquely identify states;
+        DEFAULT_COLS: list of permanent columns on `df` for MCStates object to be valid;
+
+    Future Development:
+        TODO: add name attribute
+        TODO: Explore LIL sparse structure for manipulation of ci_vec
+        TODO: pd.MultiIndex for permanent cols, MO blocks, config classes, and other computed properties
+        TODO: Adapt to using dense representation of CI vectors
+        TODO: try using STATE_COL and SOURCE_COL as index in df
+        TODO: include duplicate and similar
+        TODO: Move _state_map to RESOURCE_COL
     """
-    __slots__ = [
-        'df',
-        'ci_vecs',
-        'pdm_diags',
-        'space',
-        '_state_map'
-    ]
-
     IDX_NAME = 'idx'
 
-    # Permanent cols
     E_COL = 'E'
+    DEGENERACY_COL = 'g'
     STATE_COL = 'state'
-    SOURCE_COL = 'source'
-    RESOURCE_COL = 'resource_idx'  # index of related resource in ci_vecs and pdm_diag
+    SOURCE_COL = 'state_source'
+    RESOURCE_COL = 'resource_idx'  # index of related resource in ci_vecs and rdm_diag, see _state_map
 
-    COLS = [STATE_COL, SOURCE_COL, E_COL]
-    IDX_COLS = [STATE_COL, SOURCE_COL]
+    DEFAULT_COLS = [STATE_COL, SOURCE_COL, E_COL]  # Permanent property columns for the df
+    IDX_COLS = [STATE_COL, SOURCE_COL]  # Columns used to identify the states uniquely
 
-    df: pd.DataFrame
-    ci_vecs: sparse.csr_array | sparse.lil_array
-    pdm_diags: np.ndarray
+    ci_vecs: sparse.csr_array | sparse.lil_array  # Sparse array of CI vectors
+    rdm_diags: np.ndarray
 
     space: MCSpace | None
+    peaks: MCPeaks | None
 
-    # Used for implicit sorting of pdm_diag and ci_vec
+    # Used for implicit sorting of rdm_diag and ci_vec
+    # Move to df
     _state_map: np.ndarray
 
     def __init__(self,
-                 states: pd.DataFrame,
+                 df: pd.DataFrame,
                  ci_vecs: sparse.csr_array | sparse.lil_array | sparse.coo_array,
-                 pdm_diag: np.ndarray, /,
+                 rdm_diags: np.ndarray, /,
                  source: str = '',
                  space: MCSpace | None = None, *,
-                 sort_states: bool = False):
-
-        if not (ci_vecs.ndim == pdm_diag.ndim == states.ndim == 2):
-            raise ValueError('ci_vec, pdm_diag, and states must be 2D')
-
-        if self.E_COL not in states:
-            raise ValueError(f'states must have {self.E_COL}')
-
-        if self.STATE_COL not in states:
-            raise ValueError(f'states must have {self.STATE_COL}')
-
-        if self.SOURCE_COL not in states:
+                 sort: bool = False) -> NoReturn:
+        if self.SOURCE_COL not in df:
             if source:
-                states[self.SOURCE_COL] = source
+                df[self.SOURCE_COL] = source
             else:
-                raise ValueError(f'either states must have {self.SOURCE_COL} or source argument must be passed to '
-                                 f'{self.__class__.__name__}')
+                raise ValueError(f"either 'df' must have {self.SOURCE_COL} or "
+                                 f"source argument must be passed to {self.__class__.__name__}")
 
-        assert len(states.index) == ci_vecs.shape[0] == pdm_diag.shape[0]
+        if not (ci_vecs.ndim == rdm_diags.ndim == df.ndim == 2):
+            raise ValueError("'ci_vec', 'rdm_diag', and 'df' must be 2D")
 
-        self.df = states
-        self.reset_index()
+        if not (len(df.index) == ci_vecs.shape[0] == rdm_diags.shape[0]):
+            raise ValueError("Number of states should match across 'df' DataFrame, "
+                             "'ci_vecs' array, and 'rdm_diags' array")
 
         self.ci_vecs = ci_vecs.tocsr()
-        self.pdm_diags = pdm_diag
+        self.rdm_diags = rdm_diags
+        self.df = df
+        self.reset_index()
 
         if space is not None:
-            assert space.n_act_mo == pdm_diag.shape[1]
-            assert space.n_configs == ci_vecs.shape[1]
+            if space.n_act_mo != rdm_diags.shape[1]:
+                raise ValueError("Number of active MOs in MCSpace must be equal to number of MOs in 'rdm_diags' array")
+
+            if space.n_configs != ci_vecs.shape[1]:
+                raise ValueError("Number of configurations in MCSpace must be equal to number of determinants in "
+                                 "'ci_vecs' array")
 
         self.space = space
         self._state_map = np.arange(len(self))
-        self.df['resource_idx'] = self._state_map
+        self.peaks = None
+        # self.df['resource_idx'] = self._state_map
 
-        if sort_states:
+        if sort:
             self.sort(self.E_COL)
 
     def sort(self, col: str = E_COL) -> NoReturn:
-        idx = np.argsort(self.df[col].values)
+        idx = np.argsort(self.df_[col].values)
         self._state_map = self._state_map[idx]
-        self.df = self.df.iloc[idx]
+        self.df_ = self.df_.iloc[idx]
 
         self.reset_index()
+        if self.peaks is not None:
+            if self.peaks.INITIAL_COL in self.peaks.df or self.peaks.FINAL_COL in self.peaks.df:
+                self.peaks.calculate_state_idx(save=True, replace=True)
 
-    def filter(self, idx: npt.ArrayLike | None = None, cond: Selector | None = None,
-               label_index: bool = False) -> np.ndarray | pd.Index:
-        """Filter states on positional integer index and some condition.
+    def analyze(self, idx: npt.ArrayLike | None = None, condition: Selector | None = None,
+                save=True, replace=False, **kwargs) -> pd.DataFrame | None:
+        """Performs analysis of states, using the following functions:
+            - estimate_state_degeneracy
+            - calculate_ci_vec_norm
+            - partition_rdm_diag
+            - partition_ci_vec
 
-        States are selected based on provided index first, and then based on condition. If no idx or condition is
-        provided, the function returns array of indices to all states.
+        Notes:
+            Before performing the analysis all previously calculated properties are cleared.
 
-        TODO: return MCStates object
+        Args:
+            idx: Sequence of states indices that are passed to cond() before analysis, see .filter() method.
+            condition:  Predicate to select state that are analyzed. See .filter() method.
+            save: Whether to save result locally (save=True) onto self.df using self.update_properties(),
+                or return calculated result directly without changing local df (False).
+            replace: If save=True, choose to either append new properties as new columns (replace=False) or replace old
+                columns with new result if duplicate columns are found (replace=False).
+            **kwargs:
+
+        Keyword Args:
+            idx: Sequence of states indices that are passed to cond() before analysis, see .filter() method.
+            cond: Predicate to select state that are analyzed. See .filter() method.
+            save: If True, saves result
+            replace: if results are saved, whether to replace old results with new, or to store
+            **kwargs:
+
+        Returns:
+            If result is not saved on the Dataframe, return the Dataframe with the results
         """
-        idx = np.asarray(idx).reshape(-1) if idx is not None else np.arange(len(self))
-        selected = cond(self.df.iloc[idx]) if cond else np.s_[...]
-
-        if label_index:
-            return self.df.index[selected]
-
-        return idx[selected]
-
-    def analyze(self, idx: npt.ArrayLike | None = None, cond: Selector | None = None, *,
-                save: bool = True, replace: bool = False, **kwargs) -> pd.DataFrame | None:
         self.clear_properties()
 
         dfs = [
-            self.estimate_state_degeneracy(**kwargs, idx=idx, cond=cond, save=save, replace=replace),
-            self.calculate_ci_vec_norm(**kwargs, idx=idx, cond=cond, save=save, replace=replace),
+            self.estimate_state_degeneracy(**kwargs, idx=idx, condition=condition, save=save, replace=replace),
+            self.calculate_ci_vec_norm(**kwargs, idx=idx, condition=condition, save=save, replace=replace),
         ]
 
         try:
-            dfs.append(self.partition_pdm_diag(idx=idx, cond=cond, save=save, replace=replace))
-            dfs.append(self.partition_ci_vec(idx=idx, cond=cond, save=save, replace=replace))
+            dfs.append(self.partition_rdm_diag(idx=idx, condition=condition, save=save, replace=replace))
+            dfs.append(self.partition_ci_vec(idx=idx, condition=condition, save=save, replace=replace))
         except ValueError as err:
             warnings.warn(err.args[0])
 
         if not save:
-            return pd.concat([self.df[self.E_COL], *dfs], axis=1)
+            return pd.concat([self.df_[self.E_COL], *dfs], axis=1)
 
-    def partition_pdm_diag(self, idx: npt.ArrayLike | None = None, cond: Selector | None = None, *,
+        if self.peaks is not None:
+            self.peaks.analyze(save=True)
+
+    def partition_rdm_diag(self, idx: npt.ArrayLike | None = None, condition: Selector | None = None, *,
                            save: bool = True, replace: bool = False, **kwargs) -> pd.DataFrame | None:
+        """Partitions RDM Diagonal for selected states based on MO blocks, defined in MCSpace.
+
+        Notes:
+            Filtering of states based on index and cond() can be performed initially.
+
+        Args:
+            idx: Sequence of states indices that are passed to cond() before analysis, see .filter() method.
+            condition: Predicate to select state that are analyzed. See .filter() method.
+            save: Whether to save result locally (save=True) onto self.df using self.update_properties(),
+                or return calculated result directly without changing local df (False).
+            replace: If save=True, choose to either append new properties as new columns (replace=False) or replace old
+                columns with new result if duplicate columns are found (replace=False).
+            **kwargs: N/A
+
+        Returns:
+            if save=True:
+                pd.DataFrame with calculated partitioned RDM diagonal for selected states
+            else:
+                None
+        """
         if self.space is None:
             raise ValueError('Set MCSpace first')
 
-        idx = self.filter(idx=idx, cond=cond)
-        df = self.space.partition_pdm_diag(self.pdm_diags[self._state_map[idx]])
-        df.set_index(self.df.index[idx], inplace=True)
+        idx = self.filter(idx=idx, condition=condition)
+        df = self.space.partition_rdm_diag(self.rdm_diags[self._state_map[idx]])
+        df.set_index(self.df_.index[idx], inplace=True)
 
         if not save:
             return df
 
         self.update_properties(df, replace=replace)
 
-    def partition_ci_vec(self, idx: npt.ArrayLike | None = None, cond: Selector | None = None, *,
+    def partition_ci_vec(self, idx: npt.ArrayLike | None = None, condition: Selector | None = None, *,
                          save: bool = True, replace: bool = False, **kwargs) -> pd.DataFrame | None:
+        """Partitions CI vectors for selected states based on Configuration classes, defined in MCSpace.
+
+        Notes:
+            Filtering of states based on index and cond() can be performed initially.
+
+        Args:
+            idx: Sequence of states indices that are passed to cond() before analysis, see .filter() method.
+            condition: Predicate to select state that are analyzed. See .filter() method.
+            save: Whether to save result locally (save=True) onto self.df using self.update_properties(),
+                or return calculated result directly without changing local df (False).
+            replace: If save=True, choose to either append new properties as new columns (replace=False) or replace old
+                columns with new result if duplicate columns are found (replace=False).
+            **kwargs:  N/A
+
+        Returns:
+            if save=True:
+                pd.DataFrame with calculated partitioned CI vectors for selected states.
+            else:
+                None
+        """
         if self.space is None:
             raise ValueError('Set MCSpace first')
 
-        idx = self.filter(idx=idx, cond=cond)
+        idx = self.filter(idx=idx, condition=condition)
         df = self.space.partition_ci_vec(self.ci_vecs[self._state_map[idx]])
-        df.set_index(self.df.index[idx], inplace=True)
+        df.set_index(self.df_.index[idx], inplace=True)
 
         if not save:
             return df
 
         self.update_properties(df, replace=replace)
 
-    def calculate_ci_vec_norm(self, idx: npt.ArrayLike | None = None, cond: Selector | None = None,
-                              save: bool = True, replace: bool = False, **kwargs):
+    def calculate_ci_vec_norm(self, idx: npt.ArrayLike | None = None, condition: Selector | None = None,
+                              save: bool = True, replace: bool = False, col_name: str = 'norm', **kwargs):
+        """Calculates norm of CI vector for selected states.
+
+        norm = sqrt(Sum_i[C_i^h * C_i * <Det_i|Det_i>])
+
+        Notes:
+            Filtering of states based on index and cond() can be performed initially.
+
+        Args:
+            idx: Sequence of states indices that are passed to cond() before analysis, see .filter() method.
+            condition: Predicate to select state that are analyzed. See .filter() method.
+            save: Whether to save result locally (save=True) onto self.df using self.update_properties(),
+                or return calculated result directly without changing local df (False).
+            replace: If save=True, choose to either append new properties as new columns (replace=False) or replace old
+                columns with new result if duplicate columns are found (replace=False).
+            col_name: name of the column to store the result in.
+            **kwargs: N/A
+
+        Returns:
+            if save=True:
+                pd.DataFrame with calculated partitioned CI vector norms for selected states.
+            else:
+                None
+        """
         if self.space is None:
             raise ValueError('Set MCSpace first')
 
-        idx = self.filter(idx=idx, cond=cond)
+        idx = self.filter(idx=idx, condition=condition)
         norm = sparse.linalg.norm(self.ci_vecs, axis=1)
-        df = pd.DataFrame({'norm': norm}, index=self.df.index[idx])
+        df = pd.DataFrame({col_name: norm}, index=self.df_.index[idx])
 
         if not save:
             return df
@@ -196,13 +280,27 @@ class MCStates:
         self.update_properties(df, replace=replace)
 
     def estimate_state_degeneracy(self, tol: float = 1e-3,
-                                  idx: npt.ArrayLike | None = None, cond: Selector | None = None,
-                                  save: bool = True, replace: bool = True) -> pd.DataFrame | None:
-        idx = self.filter(idx=idx, cond=cond)
+                                  idx: npt.ArrayLike | None = None, condition: Selector | None = None,
+                                  save: bool = True, replace: bool = True,
+                                  col_name: str = DEGENERACY_COL) -> pd.DataFrame | None:
+        """
 
-        dE = self.df.loc[self.df.index[idx], self.E_COL].diff()
+        Args:
+            tol:
+            idx:
+            condition:
+            save:
+            replace:
+            col_name:
+
+        Returns:
+
+        """
+        idx = self.filter(idx=idx, condition=condition)
+
+        dE = self.df_.loc[self.df_.index[idx], self.E_COL].diff()
         dE.fillna(0, inplace=True)
-        df = pd.DataFrame({'g': (dE > tol).cumsum()})
+        df = pd.DataFrame({col_name: (dE > tol).cumsum()})
 
         if not save:
             return df
@@ -226,6 +324,8 @@ class MCStates:
         return self._state_map[mapped], np.take_along_axis(ovlp, mapped[:, np.newaxis], axis=1).ravel()
 
     def merge(self, other: 'MCStates', alignment, strategy: str = 'skip', ignore_space: bool = False) -> NoReturn:
+        raise NotImplementedError('merge functionality is not implemented')
+
         if not ignore_space and (self.space is None or other.space is None):
             warnings.warn('At least one of MCStates does not have well defined MCSpace, proceed with caution')
 
@@ -248,7 +348,10 @@ class MCStates:
         self.sort(self.E_COL)
 
     def extend(self, other: 'MCStates', ignore_space: bool = False, reset_index: bool = True) -> NoReturn:
-        """Extends the current MCStates with provided once."""
+        """Extends the current MCStates with provided one.
+
+        The function does not check for duplicates or overlaps.
+        """
         if not ignore_space and (self.space is None or other.space is None):
             warnings.warn('At least one of MCStates does not have well defined MCSpace, proceed with caution')
 
@@ -257,10 +360,12 @@ class MCStates:
 
         if self.space.n_act_mo != other.space.n_act_mo:
             raise ValueError('number of active MOs is different between instances of MCStates, cannot transfer '
-                             'pdm_diags')
+                             'rdm_diags')
 
-        # Extend pdm_diag
-        self.pdm_diags = np.vstack((self.pdm_diags, other.pdm_diags))
+        warnings.warn('MCStates.extend() does not preserve computed properties')
+
+        # Extend rdm_diag
+        self.rdm_diags = np.vstack((self.rdm_diags, other.rdm_diags))
 
         # Extend ci_vec
         if sparse.isspmatrix_lil(self.ci_vecs):
@@ -274,7 +379,21 @@ class MCStates:
         self._state_map = new_state_map
 
         # Extend df
-        self.df = pd.concat([self.df[self.COLS], other.df[self.COLS]], axis=0, copy=True)
+        self.df_ = pd.concat([self.df_[self.DEFAULT_COLS], other.df_[self.DEFAULT_COLS]], axis=0, copy=True)
+
+        if self.peaks is not None or other.peaks is not None:
+            warnings.warn('MCStates.extend() with peaks assigned is not tested')
+
+            # FIXME: implement peak extension
+            if bool(self.peaks) != bool(other.peaks):
+                valid_peaks = self.peaks if self.peaks is not None else other.peaks
+                self.peaks = valid_peaks
+            else:
+                new_peaks_df = pd.concat(
+                    [self.peaks.df[self.peaks.DEFAULT_COLS],
+                     other.peaks.df[self.peaks.DEFAULT_COLS]],
+                    axis=0, copy=True)
+                self.peaks = self.peaks.__class__(new_peaks_df, states=self)
 
         if reset_index:
             self.reset_index()
@@ -288,8 +407,8 @@ class MCStates:
             self.ci_vecs.indices = addr_map.get(self.ci_vecs.indices).values
 
         # Remove old config label classes
-        cols = [label for label in self.space.config_class_labels if label in self.df]
-        self.df.drop(columns=cols, inplace=True)
+        cols = [label for label in self.space.config_class_labels if label in self.df_]
+        self.df_.drop(columns=cols, inplace=True)
 
         # Update the space
         self.space = new_space
@@ -344,72 +463,70 @@ class MCStates:
         df.set_index(['idx', 'addr'], inplace=True)
         return df
 
-    def clear_properties(self) -> NoReturn:
-        curr_cols = set(self.df.columns) - set(self.COLS)
-        self.df.drop(columns=curr_cols, inplace=True)
-
-    def update_properties(self, new_df: pd.DataFrame, replace: bool = False) -> NoReturn:
-        cols = set(new_df.columns)
-        curr_cols = set(self.df.columns) - set(self.COLS)
-        previous_cols = cols & curr_cols
-
-        if replace:
-            self.df.drop(columns=previous_cols, inplace=True)
-            previous_cols.clear()
-
-        new_cols = cols - previous_cols
-        self.df = pd.concat([self.df, new_df[list(new_cols)]], axis=1, copy=False)
-        self.df.update(new_df[list(previous_cols)])
-
-    def reset_index(self) -> NoReturn:
-        self.df.reset_index(drop=True, inplace=True)
-        self.df.index.name = self.IDX_NAME
-
     def __getitem__(self, key: int | slice) -> 'MCStates':
         """Implements simple slice indexing for MCStates.
 
-        Note: Indexing is done by integer position of state.
-        Furthermore, the attributes of returned MCStates are views of parent object, as defined by numpy.
+        Notes:
+            Indexing is done by integer position of state.
+            Furthermore, the attributes of returned MCStates are views of parent object, as defined by numpy.
         """
         key = self._validate_key(key)
 
-        return self.__class__(
-            self.df.iloc[key],
+        new_df: pd.DataFrame = self.df_.iloc[key]
+
+        new_states = self.__class__(
+            new_df.copy(deep=True),
             self.ci_vecs[self._state_map[key]],
-            self.pdm_diags[self._state_map[key]],
+            self.rdm_diags[self._state_map[key]],
             space=self.space,
         )
+
+        if self.peaks is not None:
+            warnings.warn('Slicing MCStates with peaks assigned is not tested')
+
+            preserve_key = new_df.index.values
+            temp_df = self.peaks.calculate_state_idx()
+            included_initial = temp_df[self.peaks.INITIAL_COL].isin(preserve_key)
+            included_final = temp_df[self.peaks.FINAL_COL].isin(preserve_key)
+            new_peaks_df = self.peaks.df_[included_initial & included_final].copy(deep=True)
+            new_states.peaks = self.peaks.__class__(new_peaks_df, states=new_states)
+
+        return new_states
 
     def __setitem__(self, key: int | slice, other: 'MCStates') -> NoReturn:
         """Implements simple list-like indexing for MCStates.
 
-        Note: Indexing is done by integer position of state.
-        Furthermore, the attributes of returned MCStates are views of parent object, as defined by numpy.
-        Space equality is NOT checked, use at your own risk.
-        Columns that are not defined in COLS are ignored in states.
-        Columns that are not defined in COLS are cleared from self.
+        Notes:
+            Indexing is done by integer position of state.
+            Furthermore, the attributes of returned MCStates are views of parent object, as defined by numpy.
+            Space equality is NOT checked, use at your own risk.
+            Columns that are not defined in COLS are ignored in states.
+            Columns that are not defined in COLS are cleared from self.
         """
         if not isinstance(other, self.__class__):
             raise TypeError(f'new_states must be an instance of {self.__class__.__name__}')
 
         if self.space.n_act_mo != other.space.n_act_mo:
             raise ValueError('Number of active MOs is different between instances of MCStates, cannot transfer '
-                             'pdm_diags')
+                             'rdm_diags')
 
         # if self.space != states.space:
         #     raise ValueError('MCSpaces are not the same')
 
+        if self.peaks is not None or other.peaks is not None:
+            raise NotImplementedError('Index like setting is not implemented in the presence of peaks')
+
         key = self._validate_key(key)
-        if (n := len(self.df.iloc[key])) != len(other):
+        if (n := len(self.df_.iloc[key])) != len(other):
             raise IndexError(f'trying to set {n} states, while len(new_states) = {len(other)}')
 
         # FIXME: don't clear calculated data
         self.clear_properties()
-        self.df.iloc[key, self.COLS] = other.df[self.COLS]
-        self.df.reset_index(drop=True, inplace=True)
-        self.df.index.name = self.IDX_NAME
+        self.df_.iloc[key, self.DEFAULT_COLS] = other.df_[self.DEFAULT_COLS]
+        self.df_.reset_index(drop=True, inplace=True)
+        self.df_.index.name = self.IDX_NAME
 
-        self.pdm_diags[self._state_map[key]] = other.pdm_diags
+        self.rdm_diags[self._state_map[key]] = other.rdm_diags
 
         found_lil = sparse.isspmatrix_lil(self.ci_vecs)
         ci_vec = self.ci_vecs if found_lil else self.ci_vecs.tolil()
@@ -418,12 +535,23 @@ class MCStates:
 
     def __delitem__(self, key: int | slice) -> NoReturn:
         key = self._validate_key(key)
-        self.df.drop(self.df.index[key], inplace=True)
-        preserve_key = self.df.index.values  # indices of states that are preserved
+
+        drop_key = self.df_.index[key]
+        if self.peaks is not None:
+            warnings.warn('Slicing MCStates with peaks assigned is not tested')
+
+            temp_df = self.peaks.calculate_state_idx()
+            included_initial = temp_df[self.peaks.INITIAL_COL].isin(drop_key)
+            included_final = temp_df[self.peaks.FINAL_COL].isin(drop_key)
+            new_peaks_df = self.peaks.df_[~(included_initial | included_final)].copy(deep=True)
+            self.peaks = self.peaks.__class__(new_peaks_df, states=new_peaks_df)
+
+        self.df_.drop(drop_key, inplace=True)
+        preserve_key = self.df_.index.values  # indices of states that are preserved
         left_states = self._state_map[preserve_key]
 
-        self.df.reset_index(drop=True, inplace=True)
-        self.df.index.name = self.IDX_NAME
+        self.df_.reset_index(drop=True, inplace=True)
+        self.df_.index.name = self.IDX_NAME
 
         # TODO: try to use vstack
         found_lil = sparse.isspmatrix_lil(self.ci_vecs)
@@ -431,7 +559,7 @@ class MCStates:
         ci_vec = ci_vec[self._state_map[preserve_key]]
         self.ci_vecs = ci_vec.tocsr() if found_lil else ci_vec
 
-        self.pdm_diags = np.delete(self.pdm_diags, self._state_map[key], axis=0)
+        self.rdm_diags = np.delete(self.rdm_diags, self._state_map[key], axis=0)
 
         # Update state_map by finding inverse of sorting order
         self._state_map = np.empty_like(left_states)
@@ -439,44 +567,44 @@ class MCStates:
 
     def _validate_key(self, key: int | slice) -> slice:
         if isinstance(key, int):
-            if key >= len(self) or key < -len(self):
+            if key < -len(self) or len(self) <= key:
                 raise IndexError(f'index {key} is out of bounds for {self.__class__.__name__} '
                                  f'with {len(self)} states')
 
             key = slice(key, key + 1, 1)
         return key
 
-    def print_state(self, include_mo: bool = False, include_config_class: bool = False,
+    def print_state(self, include_mo: bool = True, include_config_class: bool = True,
                     config_limit: int = 5, shift_ground: bool = False,
-                    idx: npt.ArrayLike | None = None,
-                    cond: Selector | None = None) -> NoReturn:
-        idx = self.filter(idx=idx, cond=cond)
+                    idx: npt.ArrayLike | None = None, condition: Selector | None = None) -> NoReturn:
+        BAR_WIDTH = 120
 
-        E = self.df.loc[idx, self.E_COL] - (self.min_energy and shift_ground)
+        idx = self.filter(idx=idx, condition=condition)
 
-        mo_block_labels = [m for m in self.space.mo_block_labels if m in self.df] if include_mo else []
-        df_pdm = self.df.loc[idx, mo_block_labels].apply(
-            lambda r: '+'.join([f'{l}({v:>5.2f})' for l, v in r.items()]), axis=1)
+        E = self.df_.loc[idx, self.E_COL] - (self.min_energy * shift_ground)
 
-        config_class_labels = [c for c in self.space.config_class_labels if c in self.df] if include_config_class else []
-        df_config_class = self.df.loc[idx, config_class_labels].apply(
-            lambda r: '+'.join([f'{l}({v:7.3%})' for l, v in r.items()]), axis=1)
+        mo_block_labels = [m for m in self.space.mo_block_labels if m in self.df_] if include_mo else []
+        df_rdm = self.df_.loc[idx, mo_block_labels].apply(
+            lambda r: ' + '.join([f'{l}({v:>5.2f})' for l, v in r.items()]), axis=1)
 
-        print('=' * 79)
+        config_class_labels = [c for c in self.space.config_class_labels if c in self.df_] if include_config_class else []
+        df_config_class = self.df_.loc[idx, config_class_labels].apply(
+            lambda r: ' + '.join([f'{l}({v:7.3%})' for l, v in r.items()]), axis=1)
+
+        print('=' * BAR_WIDTH)
 
         for i in idx:
             index = f'#{i:>5d}:'
-            energy = f'E = {E.loc[i]:12.6e}Eh'
-            header = [index, energy]
+            energy = f'E = {E.loc[i]:12.6G}Eh'
+            print(index, energy)
 
-            if pop_str := df_pdm.get(i):
-                header.append('MO: ' + pop_str)
+            if pop_str := df_rdm.get(i):
+                print(' ' * len(index) + ' MO: ' + pop_str)
 
             if ci_str := df_config_class.get(i):
-                header.append('|ψ> = ' + ci_str)
+                print(' ' * len(index) + ' |ψ> = ' + ci_str)
 
-            print(*header)
-            print('-' * 79)
+            print('-' * BAR_WIDTH)
             print(
                 ' Addr'.center(5),
                 *[f'RAS{i + 1}'.center(w) for i, w in enumerate(self.space.graph.spaces)],
@@ -503,37 +631,68 @@ class MCStates:
                       f'C = {coeffs[j]:>13.3f}',
                       f'|C|^2 = {coeffs_abs[j]:+5.3f}')
 
-            print('=' * 79)
+            print('=' * BAR_WIDTH)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], **kwargs) -> 'MCStates':
+    def from_dict(cls, data: dict[str, Any], /,
+                  df_key: str = 'df_states',
+                  ci_vecs_key: str = 'ci_vecs',
+                  rdm_diags_key: str = 'rdm_diags',
+                  space_key: str = 'space',
+                  source_key: str = 'source',
+                  **kwargs) -> 'MCStates':
         data.update(kwargs)
 
-        states = data.pop('df_states')
-        ci_vecs = data.pop('ci_vecs')
-        pdm_diags = data.pop('pdm_diags')
+        df = data.pop(df_key)
+        ci_vecs = data.pop(ci_vecs_key)
+        rdm_diags = data.pop(rdm_diags_key)
 
-        space = data.pop('space', None)
+        space = data.pop(space_key, None)
         if isinstance(space, dict):
+            from .mcspace import MCSpace
             space = MCSpace.from_dict(space)
 
-        return cls(
-            states, ci_vecs, pdm_diags,
-            source=data.get('source'), space=space,
-            sort_states=kwargs.get('sort_states', False)
+        states = cls(
+            df, ci_vecs, rdm_diags,
+            source=data.get(source_key, ''), space=space,
+            sort=kwargs.get('sort_states', False)
         )
+
+        try:
+            from .mcpeaks import MCPeaks
+
+            states.peaks = MCPeaks.from_dict(data, states=states, states_key='states')
+        except KeyError:
+            pass
+
+        return states
+
+    @property
+    def df(self) -> pd.DataFrame:
+        return self.df_
+
+    @df.setter
+    def df(self, new_df: pd.DataFrame) -> NoReturn:
+        for col in self.DEFAULT_COLS:
+            if col not in new_df:
+                raise ValueError(f"'df' must have {col}")
+
+        if not (self.ci_vecs.ndim == self.rdm_diags.ndim == new_df.ndim == 2):
+            raise ValueError('df must be 2D')
+
+        self.df_ = new_df
 
     @property
     def E(self) -> np.ndarray:
-        return self.df[self.E_COL].values
+        return self.df_[self.E_COL].values
 
     @property
     def min_energy(self) -> np.float64:
-        return self.df[self.E_COL].min()
+        return np.float64(self.df_[self.E_COL].min())
 
     @property
     def max_energy(self) -> np.float64:
-        return self.df[self.E_COL].max()
+        return np.float64(self.df_[self.E_COL].max())
 
     @property
     def energy_range(self) -> tuple[np.float64, np.float64]:
@@ -544,58 +703,18 @@ class MCStates:
         energy_str = f'E=[{emin:>11.6f}, {emax:>11.6f}]'
         return f'{self.__class__.__name__}({energy_str}, #states={len(self)})'
 
-    def __len__(self) -> int:
-        return len(self.df)
-
 
 if __name__ == '__main__':
     import os, copy
 
     from mctools.parser.gaussian.utils import parse_gdvlog
-    from mctools.parser.gaussian.l910 import l910_parser_funcs
+    from mctools.parser.gaussian.l910 import l910_parser_funcs_general
 
     data_dir = os.path.join('data')
     space1_filename = os.path.join(data_dir, 'rasci_1.space.json')
     gdvlog1 = os.path.join(data_dir, 'rasci_1.log')
 
     space1 = MCSpace.from_json(space1_filename)
-    data1 = parse_gdvlog(gdvlog1, l910_parser_funcs, n_ground=14)
+    data1 = parse_gdvlog(gdvlog1, l910_parser_funcs_general, n_ground=14)
     states1 = MCStates.from_dict(data1, space=space1)
 
-    # df_example = pd.read_csv(os.path.join(data_dir, 'states.csv'), index_col='state')
-    # ci_vec_example = sparse.csr_array(sparse.load_npz(os.path.join(data_dir, 'ci_vecs_small.npz')), copy=True)
-    # pdm_diags_example = data['pdm_diags']
-    #
-    # states_example = MCStates(df_example, ci_vec_example, pdm_diags_example, space=space_example)
-    # states_example.analyze()
-    #
-    # s1 = copy.deepcopy(states_example[:14])
-    # s2 = copy.deepcopy(states_example[20:30])
-    # s3 = copy.deepcopy(s1)
-    # s4 = copy.deepcopy(states_example[:40])
-    # s5 = copy.deepcopy(states_example[25:45])
-    #
-    # s1.extend(s2)
-    # s1.extend(s4)
-
-    # s1.sort(s1.E_COL)
-    #
-    # del s1[:2]
-    #
-    # print(s1.df)
-    # print(align_states(s1, s5))
-
-    # space2_filename = os.path.join(data_dir, 'rasci_2.space.json')
-    # gdvlog2 = os.path.join(data_dir, 'rasci_2.log')
-    #
-    # space2 = MCSpace.from_json(space2_filename)
-    # data2 = parse_gdvlog(gdvlog2, l910_parser_funcs, n_ground=14)
-    # states2 = MCStates.from_dict(data2, space=space2)
-    #
-    # mask = (((1 << 4) - 1) << 8) | 3
-
-    # def transform(configs):
-    #     configs[..., 0] <<= 2
-    #     configs[..., 0] |= mask
-    #
-    # states2.update_space(space1, transform=transform)

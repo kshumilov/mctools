@@ -92,6 +92,7 @@ def get_config_repr(config: npt.ArrayLike, spaces: tuple[int, ...], /, *,
     config = np.asarray(config, dtype=config_dtype).reshape(-1, len(spaces))
 
     def to_str(config_: npt.NDArray[np.unicode]) -> str:
-        return ' '.join([np.binary_repr(c, width=n)[::-1] for c, n in zip(config_, spaces)])
+        return ' '.join([np.binary_repr(c, width=n)[::-1]
+                         for c, n in zip(config_, spaces)])
 
     return np.apply_along_axis(to_str, -1, config)

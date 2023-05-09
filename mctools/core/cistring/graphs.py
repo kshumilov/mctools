@@ -1,7 +1,7 @@
 import warnings
+from collections import defaultdict
 from itertools import product
-from dataclasses import dataclass, field
-from typing import NamedTuple, NoReturn, Tuple, Literal, ClassVar, Any
+from typing import NamedTuple, NoReturn, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -12,20 +12,22 @@ from .utils import *
 
 __all__ = [
     'RASMOs', 'Electrons',
-    'CIGraph', 'RASGraph',
+    'SimpleGraph', 'RASGraph',
 ]
 
 
-class CIGraph:
+class SimpleGraph:
     """Basic CI string manipulations such as addressing, excitation lists, etc.
 
     In this implementations, the edge unoccupied edges of the graph are taken to be zero.
     This means that only occupied orbitals play roles in formation of the CI configuration address.
 
+    Attributes:
+        n_orb: int --- # Number of orbitals in the space
+        n_elec: int --- # Number of electrons in the space
+
     TODO: Rewrite nodes and edges formation in rectangle format (i.e. transform parallelogram graph into rectangle)
-    TODO: rewrite conversion using hdf5 format
     TODO: implement <I|J>, p^+|J>, p|J>, excitation lists, etc...
-    TODO: (maybe) Implement as a subclass of np.ndarray
     TODO: Fix dtypes and typing
     TODO: allow python int type for configurations
     TODO: Use dtype with multiple int fields to manipulate strings
@@ -42,23 +44,22 @@ class CIGraph:
     n_orb: int
     n_elec: int
 
-    n_configs: int
+    n_configs: int  # Number of determinants = n_orb choose n_e
     reverse: bool
 
     nodes: npt.NDArray[np.uint64]
     edges: npt.NDArray[np.uint64]
     offsets: npt.NDArray[np.uint64]
 
-    dtype: ClassVar[npt.DTypeLike] = np.dtype(np.uint64)
+    dtype: npt.DTypeLike = np.dtype(np.uint64)
     # config_dtype: ClassVar[npt.DTypeLike] = np.dtype(np.int64)
     # max_orb: ClassVar[np.int64] = dtype.type(config_dtype.itemsize * BYTE_TO_BITS)
 
-    def __init__(self, n_orb: int, n_elec: int, /, reverse: bool = False, nodes: npt.NDArray[np.uint64] | None = None,
-                 use_python_int: bool = False):
-        # TODO: use numpy structured dtype in the future
+    def __init__(self, n_orb: int, n_elec: int, /, nodes: npt.NDArray[np.uint64] | None = None, *,
+                 reverse: bool = False, use_python_int: bool = False):
         if use_python_int:
             warnings.warn('Using python int as config data type, expect slow performance', RuntimeWarning)
-            self.config_dtype = object
+            self.config_dtype = np.dtype(object)
             self.max_orb = np.inf
         else:
             self.config_dtype = np.dtype(np.int64)
@@ -66,7 +67,7 @@ class CIGraph:
 
         if n_orb > self.max_orb:
             raise ValueError(f'{self.__class__.__name__} is unable to support space with {n_orb} orbitals. '
-                             f'Current maximum is {self.max_orb} orbitals')
+                             f'Current maximum is {self.max_orb} orbitals.')
 
         if not (n_orb >= n_elec >= 0):
             raise ValueError('Invalid definition of active space')
@@ -108,13 +109,13 @@ class CIGraph:
         return Y
 
     def get_nodes(self) -> npt.NDArray[np.uint64]:
-        """Builds weights of nodes in graph according to the ordering.
+        """Builds weights of nodes in graph according to the given ordering.
 
         In 'reverse' ordering paths run (0, 0) -> (e, o), while in 'direct' (#e, #o) -> (e, o).
         The weight of a node is thus can be written as:
             nodes[e, o] = (len(path) choose #diagonals steps)
-                        = (o choose e) --- reverse
-                        = (#o - o choose #e - e) --- direct
+                        = (o choose e) <--> reverse
+                        = (#o - o choose #e - e) <--> direct
         """
         nodes = np.zeros((self.n_elec + 1, self.n_orb + 1), dtype=self.dtype)
 
@@ -135,7 +136,7 @@ class CIGraph:
         However, there are only (#elec + 1, #orb - #elec + 1) non-zero elements
         which form a slanted array.
 
-        For example, here is directly ordered weights of CAS(7, 3):
+        For example, here is directly ordered weights of CAS(7o, 3e) in Kramer's unrestricted formalism:
               <--#o - #e + 1-->
               0   1   2   3   4   5   6   7 --- #orb + 1
            ---------------------------------
@@ -166,15 +167,21 @@ class CIGraph:
 
         addr = np.zeros_like(config, dtype=self.dtype)
 
-        o = 0 if self.config_dtype is object else self.dtype.type(0)
-        e = np.zeros_like(config, dtype=self.dtype)
+        o = 0
+        e = np.zeros_like(config)
+        bit = np.zeros_like(addr, dtype=self.config_dtype)
 
-        ONE = 1 if self.config_dtype is object else self.dtype.type(1)
         while (idx := e < self.n_elec).any():
-            bit = ((config[idx] >> o) & ONE).astype(self.dtype)
-            e[idx] += bit
-            addr[idx] += self.edges[e[idx] - 1, o] * bit
-            o += ONE
+            # bit = ((config[idx] >> o) & ONE).astype(self.dtype)
+            np.right_shift(config, o, out=bit, where=idx, dtype=self.config_dtype, casting='unsafe')
+            np.bitwise_and(bit, 1, out=bit, where=idx, dtype=self.config_dtype)
+
+            # e[idx] += bit
+            np.add(e, bit, out=e, where=idx, dtype=e.dtype, casting='unsafe')
+
+            addr[idx] += (self.edges[e[idx] - 1, o] * bit[idx]).astype(addr.dtype)
+
+            o += 1
         return addr
 
     def get_config(self, addr: np.ndarray) -> np.ndarray:
@@ -187,10 +194,7 @@ class CIGraph:
             o = o_idx[e_idx == e]
             j = np.searchsorted(self.offsets[e, o], addr, side='right') - 1
             addr -= self.edges[e, o[j]]
-            if self.config_dtype is object:
-                config |= (1 << o[j].astype(object))
-            else:
-                config |= (1 << o[j]).astype(self.config_dtype)
+            config |= np.left_shift(1, o[j], dtype=self.config_dtype)
             e += 1
         return config
 
@@ -209,22 +213,26 @@ class CIGraph:
         return get_config_repr(config, (self.n_orb,), config_dtype=self.config_dtype)
 
     @property
-    def space_mask(self) -> int:
-        if self.config_dtype is object:
-            return int((1 << self.n_orb) - 1)
-        return (self.config_dtype.type(1) << self.config_dtype.type(self.n_orb)) - self.config_dtype.type(1)
+    def space_mask(self) -> int | np.int64:
+        raw_mask = 2 ** self.n_orb - 1
+        return self.config_dtype.type(raw_mask)
+
+        # if self.config_dtype is object:
+        #     return int((1 << self.n_orb) - 1)
+        # return (self.config_dtype.type(1) << self.config_dtype.type(self.n_orb)) - self.config_dtype.type(1)
 
     def get_graph_spec(self) -> str:
         return f'[{self.n_elec:>2d}e, {self.n_orb:>2d}o]'
 
     def __repr__(self) -> str:
         spec = self.get_graph_spec()
-        return f'{self.__class__.__name__}({spec}, #Det={self.n_configs})'
+        return f'{self.__class__.__name__}({spec}, #Det={self.n_configs:,d})'
 
-    def __eq__(self, other: 'CIGraph') -> bool:
+    def __eq__(self, other: 'SimpleGraph') -> bool:
         return self.n_orb == other.n_orb and \
                self.n_elec == other.n_elec and \
-               self.reverse == other.reverse
+               self.reverse == other.reverse and \
+               self.config_dtype == other.config_dtype
 
     def print_weights(self) -> NoReturn:
         # TODO: correctly implement printing of weights
@@ -252,11 +260,11 @@ class Electrons(NamedTuple):
     beta: int  # #beta electrons
 
 
-CIGraphs = dict[tuple[int, int], list[CIGraph]]
+SimpleGraphs = dict[tuple[int, int], list[SimpleGraph]]
 
 
 class RASGraph:
-    """Implements RAS/CAS CI string graph, using CIGraph class as a basis.
+    """Implements RAS/CAS CI string graph, using SimpleGraph class as a basis.
 
     TODO: 1c formalism
     TODO: hdf5 storage
@@ -268,7 +276,7 @@ class RASGraph:
         'spaces', 'elec',
         'max_hole', 'max_elec', 'n_configs',
         'reverse', 'cat_order',
-        'graphs', 'categories', 'restriction_map',
+        'graphs', 'categories', 'cat_map',
         'config_dtype'
     ]
 
@@ -283,9 +291,9 @@ class RASGraph:
 
     n_configs: int
 
-    graphs: CIGraphs
+    graphs: SimpleGraphs
     categories: np.ndarray
-    restriction_map: np.ndarray
+    cat_map: dict[tuple[int, int], int]
     config_dtype: npt.DTypeLike
 
     def __init__(self, spaces: RASMOs, elec: Electrons, max_hole: int, max_elec: int, /,
@@ -314,103 +322,82 @@ class RASGraph:
         # TODO: use numpy structured dtype in the future
         if use_python_int:
             warnings.warn('Using python int as config data type, expect slow performance', RuntimeWarning)
-            self.config_dtype = object
+            self.config_dtype = np.dtype(object)
         else:
             self.config_dtype = np.dtype(np.int64)
 
         self._build_graph(reverse=reverse, use_python_int=use_python_int)
 
-    def get_ras_graphs(self, use_ipython_int: bool = False) -> list[list[CIGraph]]:
-        graphs: list[list[CIGraph]] = [[], [], []]
-
-        # RAS1
-        for n_h in range(self.max_hole + 1):
-            graphs[0].append(CIGraph(self.spaces.r1, self.spaces.r1 - n_h,
-                                     reverse=self.reverse, use_python_int=use_ipython_int))
-
-        # RAS2
-        for n_e in range(self.spaces.r2 + 1):
-            graphs[1].append(CIGraph(self.spaces.r2, n_e,
-                                     reverse=self.reverse, use_python_int=use_ipython_int))
-
-        # RAS3
-        for n_p in range(self.max_elec + 1):
-            graphs[2].append(CIGraph(self.spaces.r3, n_p,
-                                     reverse=self.reverse, use_python_int=use_ipython_int))
-
-        return graphs
-
     def _build_graph(self, reverse: bool = False, use_python_int: bool = False) -> NoReturn:
-        graphs: CIGraphs = {}
-
-        holes, elecs = np.arange(self.max_hole + 1), np.arange(self.max_elec + 1)
-        restriction_map = self.n_elec - (self.spaces.r1 - holes) - elecs[:, np.newaxis]
-        n_cat = np.count_nonzero((self.spaces.r2 >= restriction_map) & (restriction_map >= 0))
+        # Find valid categories
+        cat_map = defaultdict(lambda: -1)
+        for r3_ne, r1_nh in product(range(self.max_elec + 1), range(self.max_hole + 1)):
+            r1_ne = self.spaces.r1 - r1_nh
+            if (r2_ne := self.n_elec - (r1_ne + r3_ne)) >= 0:
+                cat_map[(r1_ne, r3_ne)] = r2_ne
 
         # FIXME: Use numpy fields for category array, maybe use a pd.DataFrame
-        offsets = np.zeros(shape=(n_cat, 7), dtype=CIGraph.dtype)
+        n_cat = len(cat_map)
+        offsets = np.zeros(shape=(n_cat, 2 * self.n_spaces + 1), dtype=SimpleGraph.dtype)
 
-        cat_idx, n_configs = 0, 0
-        for ie, ih in product(elecs, holes):
-            n_e = restriction_map[ie, ih]
-            if 0 <= n_e <= self.spaces.r2:
-                cat_graphs = [
-                    CIGraph(self.spaces.r1, self.spaces.r1 - ih, reverse=reverse, use_python_int=use_python_int),
-                    CIGraph(self.spaces.r2, n_e, reverse=reverse, use_python_int=use_python_int),
-                    CIGraph(self.spaces.r3, ih, reverse=reverse, use_python_int=use_python_int),
-                ]
+        graphs: SimpleGraphs = {}
+        graphs_cache: dict[tuple[int, int], SimpleGraph] = {}
+        graph_kwargs = dict(reverse=reverse, use_python_int=use_python_int)
 
-                # Calculate dimensions of each category w.r.t to their RAS
-                offsets[cat_idx, 0] = cat_graphs[0].n_configs
-                offsets[cat_idx, 1] = cat_graphs[1].n_configs
-                offsets[cat_idx, 2] = cat_graphs[2].n_configs
+        n_configs = 0
+        for cat_idx, ((r1_ne, r3_ne), r2_ne) in enumerate(cat_map.items()):
+            space_occ = [r1_ne, r2_ne, r3_ne]
 
-                # Offset of the category
-                offsets[cat_idx, 3] = n_configs
-                n_configs += np.prod(offsets[cat_idx, :3])
+            cat_graphs = [
+                graphs_cache.setdefault(
+                    (n_orb, n_elec),
+                    SimpleGraph(n_orb, n_elec, **graph_kwargs)
+                )
+                for n_orb, n_elec in zip(self.spaces, space_occ)
+            ]
 
-                # Restrictions for the category
-                offsets[cat_idx, 4] = ih
-                offsets[cat_idx, 5] = n_e
-                offsets[cat_idx, 6] = ie
+            # Calculate dimensions of each category w.r.t to their RAS
+            offsets[cat_idx, :self.n_spaces] = [g.n_configs for g in cat_graphs]
 
-                graphs[(ie, ih)] = cat_graphs
-                restriction_map[ie, ih] = cat_idx
-                cat_idx += 1
+            # Offset of the category
+            offsets[cat_idx, self.n_spaces] = n_configs
+            n_configs += np.prod(offsets[cat_idx, :self.n_spaces])
+
+            # Restrictions for the category
+            offsets[cat_idx, self.n_spaces + 1:] = space_occ
+
+            graphs[(r1_ne, r3_ne)] = cat_graphs
+            cat_map[(r1_ne, r3_ne)] = cat_idx
+            cat_idx += 1
 
         self.graphs = graphs
         self.categories = offsets
-        self.restriction_map = restriction_map
+        self.cat_map = cat_map
         self.n_configs = int(n_configs)
 
     def get_category_configs(self, n_holes: int, n_elec: int) -> ConfigArray:
-        cat_idx = self.restriction_map[n_elec, n_holes]
+        cat_spec = self.spaces.r1 - n_holes, n_elec
+        cat_idx = self.cat_map[cat_spec]
 
         if cat_idx < 0:
             return np.zeros((0, 0, 0, 0), dtype=self.config_dtype)
 
-        ih, n_e, ie = self.categories[cat_idx, 4:7]
-        r1_graph, r2_graph, r3_graph = self.graphs[(ie, ih)]
+        raw_config = []
+        for graph in self.graphs[cat_spec]:
+            raw_config.append(graph.get_all_configs())
 
-        r1_configs = r1_graph.get_all_configs()
-        r2_configs = r2_graph.get_all_configs()
-        r3_configs = r3_graph.get_all_configs()
-
-        configs = np.array(np.meshgrid(r1_configs, r2_configs, r3_configs, indexing='ij'))
-
+        config = np.array(np.meshgrid(*raw_config, indexing='ij'))
         match self.cat_order:
             case 'C':
-                configs = configs.transpose((1, 2, 3, 0))
+                config = config.transpose((1, 2, 3, 0))
             case 'F':
-                configs = configs.transpose((3, 2, 1, 0))
-        return configs
+                config = config.transpose((3, 2, 1, 0))
+
+        return config
 
     def get_category_addrs(self, n_holes: int, n_elec: int) -> AddrArray:
         # TODO: get config addresses for a category
         raise NotImplementedError()
-        # cat_idx = self.restriction_map[n_elec, n_holes]
-        # if cat_idx < 0:
-        #     return np.zeros((0,), dtype=CIGraph.config_dtype)
 
     def get_address(self, config: npt.ArrayLike) -> AddrArray:
         config = np.asarray(config, dtype=self.config_dtype).reshape(-1, self.n_spaces)
@@ -418,21 +405,14 @@ class RASGraph:
 
         # Calculate #holes, #electrons (ras2), #electrons (ras3)
         config_pop = get_elec_count(config, config_dtype=self.config_dtype)
-        config_pop[:, 0] = self.spaces.r1 - config_pop[:, 0]
-        cat_idx = self.restriction_map[config_pop[:, 2], config_pop[:, 0]]
+        cat_idx = np.apply_along_axis(lambda x: self.cat_map[tuple(x)], 1, config_pop[:, (0, 2)])
 
-        addr = np.zeros_like(config, dtype=CIGraph.dtype)
+        addr = np.zeros_like(config, dtype=SimpleGraph.dtype)
         for cat in np.unique(cat_idx):
             idx = cat_idx == cat
-
-            ih, n_e, ie = self.categories[cat, 4:7]
-            r1_graph, r2_graph, r3_graph = self.graphs[(ie, ih)]
-            addr[idx, 0] = r1_graph.get_address(config[idx, 0])
-            addr[idx, 1] = r2_graph.get_address(config[idx, 1])
-            addr[idx, 2] = r3_graph.get_address(config[idx, 2])
-
-            # for i, cnt in enumerate(self.categories[cat, 4:7]):
-            #     addr[idx, i] = self.graphs[i][cnt].get_address(config[idx, i])
+            r1_ne, r2_ne, r3_ne = self.categories[cat, self.n_spaces + 1:2 * self.n_spaces + 1]
+            for i, graph in enumerate(self.graphs[(r1_ne, r3_ne)]):
+                addr[idx, i] = graph.get_address(config[idx, i])
 
         # Ravel each address according to its category dimensions
         match self.cat_order:
@@ -446,23 +426,17 @@ class RASGraph:
         return addr.sum(axis=1) + self.categories[cat_idx, 3].astype(np.uint)
 
     def get_config(self, addr: npt.ArrayLike) -> ConfigArray:
-        raveled_addr = np.asarray(addr, dtype=CIGraph.dtype).reshape(-1).copy()
+        raveled_addr = np.asarray(addr, dtype=SimpleGraph.dtype).reshape(-1).copy()
 
         cat_idx = np.searchsorted(self.categories[:, 3], raveled_addr, side='right') - 1
         raveled_addr -= self.categories[cat_idx, 3]
 
         # Unravel the address
-        addr = np.zeros((len(raveled_addr), 3), dtype=CIGraph.dtype)
+        addr = np.zeros((len(raveled_addr), 3), dtype=SimpleGraph.dtype)
         match self.cat_order:
             case 'F':
                 addr[:, 0] = raveled_addr
-
-                # addr[:, 1] = raveled_addr // self.categories[cat_idx, 0]
-                # addr[:, 0] = raveled_addr % self.categories[cat_idx, 0]
-                #
-                # addr[:, 2] = addr[:, 1] // self.categories[cat_idx, 1]
-                # addr[:, 1] = addr[:, 1] % self.categories[cat_idx, 1]
-                for i in range(1, self.n_spaces - 1):
+                for i in range(1, self.n_spaces):
                     addr[:, i], addr[:, i - 1] = np.divmod(addr[:, i - 1], self.categories[cat_idx, i - 1])
 
             case 'C':
@@ -471,15 +445,10 @@ class RASGraph:
 
         config = np.zeros_like(addr, dtype=self.config_dtype)
         for cat in np.unique(cat_idx):
-            idx = cat_idx == cat
-
-            ih, n_e, ie = self.categories[cat, 4:7]
-            r1_graph, r2_graph, r3_graph = self.graphs[(ie, ih)]
-            config[idx, 0] = r1_graph.get_config(addr[idx, 0])
-            config[idx, 1] = r2_graph.get_config(addr[idx, 1])
-            config[idx, 2] = r3_graph.get_config(addr[idx, 2])
-            # for i, cnt in enumerate(self.categories[cat, 4:7]):
-            #     config[idx, i] = self.graphs[i][cnt].get_config(addr[idx, i])
+            idx = (cat_idx == cat)
+            r1_ne, r2_ne, r3_ne = self.categories[cat, self.n_spaces + 1:2 * self.n_spaces + 1]
+            for i, graph in enumerate(self.graphs[(r1_ne, r3_ne)]):
+                config[idx, i] = graph.get_config(addr[idx, i])
 
         return config
 
@@ -495,7 +464,7 @@ class RASGraph:
         return get_config_repr(config, self.spaces, config_dtype=self.config_dtype)
 
     @property
-    def space_mask(self) -> npt.NDArray[CIGraph.dtype]:
+    def space_mask(self) -> npt.NDArray[SimpleGraph.dtype]:
         mask = np.asarray(self.spaces, dtype=self.config_dtype)
         if self.config_dtype is object:
             return (1 << mask) - 1
@@ -537,7 +506,7 @@ class RASGraph:
 
     def __repr__(self) -> str:
         ras_spec = self.get_graph_spec()
-        return f'{self.__class__.__name__}([{ras_spec}], #Det={self.n_configs:_d}, #Cat={self.n_cat})'
+        return f'{self.__class__.__name__}([{ras_spec}], #Det={self.n_configs:,d}, #Cat={self.n_cat})'
 
     def __eq__(self, other: 'RASGraph') -> bool:
         return self.spaces == other.spaces and \
@@ -555,7 +524,23 @@ if __name__ == '__main__':
 
     configs = graph.get_config([204391, 203794])
     print(graph.get_config_repr(configs))
+    print()
 
+    addrs = graph.get_address(configs)
+    new_configs = graph.get_config(addrs)
+    print(graph.get_config_repr(new_configs))
+
+    ras = RASMOs(0, 68, 0)
+    elec = Electrons(67, 0)
+    graph = RASGraph(ras, elec, 0, 0, use_python_int=True)
+
+    configs = graph.get_category_configs(0, 0)
+    print(graph.get_config_repr(configs))
+    print()
+
+    addrs = graph.get_address(configs)
+    new_configs = graph.get_config(addrs)
+    print(graph.get_config_repr(new_configs))
     # g = CIGraph(7, 3)
     # W = g.get_nodes()
     # Y = g.get_edges(W)

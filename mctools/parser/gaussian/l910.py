@@ -1,3 +1,4 @@
+import math
 import re
 
 from functools import reduce
@@ -7,15 +8,31 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from mctools.core import MCStates, MCSpectrum
+from mctools.core import MCStates, MCPeaks
 
-from ..lib import find_line_in_file, find_pattern_in_file, grouped_tmplt, simple_float_tmplt, simple_int_tmplt, \
-    simple_bool_tmplt
+from ..lib import (
+    find_line_in_file,
+    find_pattern_in_file,
 
-from .utils import bool_map, process_complex_match, read_matrix_in_file, ParsingResult
+    ParsingResult,
+
+    grouped_tmplt,
+    simple_float_tmplt,
+    simple_int_tmplt,
+    simple_bool_tmplt,
+)
+
+from .utils import float_patt, bool_map, process_complex_match, process_float_match, read_matrix_in_file
 
 __all__ = [
-    'l910_parser_funcs'
+    'l910_parser_funcs_general',
+    'l910_parser_funcs_rdms',
+
+    'read_rdms',
+    'read_mc_spec',
+    'read_ci',
+    'read_rdm_diags',
+    'read_oscillator_strength',
 ]
 
 mc_spec_start_patt = re.compile(r'Input Summary:')
@@ -51,6 +68,12 @@ orb_info_patt = re.compile(r''.join([
     r'NVOrb=\s*%s\s*' % grouped_tmplt % (r'n_virt', simple_int_tmplt),
 ]))
 
+sa_start_patt = re.compile(r'SA Weights Read:')
+sa_weight_patt = re.compile(r''.join([
+    'State:\s*%s\s*' % grouped_tmplt % ('state_idx', simple_int_tmplt),
+    'Weight:\s*%s\s*' % (float_patt % 'weight'),
+]))
+
 tot_elec_info_patt = re.compile(r''.join([
     r'Electrons, Alpha=\s*%s\s*Beta=\s*%s' % (
         grouped_tmplt % (r'n_elec_a', simple_int_tmplt),
@@ -76,6 +99,8 @@ def read_mc_spec(file: TextIO, /, first_line: str = '') -> tuple[ParsingResult, 
     if match is None:
         raise ValueError('No MCSCF Specification is found')
 
+    mc_spec = {}
+
     orb_type_info, line = find_pattern_in_file(file, orb_type_patt, first_line=line, default_group_map=bool_map)
     ci_type_info, line = find_pattern_in_file(file, ci_type_patt, first_line=line, default_group_map=bool_map)
 
@@ -90,8 +115,28 @@ def read_mc_spec(file: TextIO, /, first_line: str = '') -> tuple[ParsingResult, 
     else:
         ras_mo = (mc_info['n_ras1'], mc_info['n_ras2'], mc_info['n_ras3'])
 
-    orb_info, line = find_pattern_in_file(file, orb_info_patt, first_line=line, default_group_map=int)
+    mc_spec.update({'ras': ras_mo, 'n_mos': sum(ras_mo)})
+
+    orb_info, line = find_line_in_file(file, orb_info_patt, first_line=line, default_group_map=int)
     mo = (orb_info['n_inact'], orb_info['n_act'], orb_info['n_virt'])
+    mc_spec['mo_all'] = mo
+
+    match, line = find_line_in_file(file, sa_start_patt, first_line=line, n_skips=1)
+    if match is not None:
+        sa_weights_info, line = find_pattern_in_file(file, sa_weight_patt,
+                                                     group_maps={'weight': float,},
+                                                     until_first_failure=True, max_matches=math.inf)
+        idx = []
+        sa_weights = []
+        while sa_weights_info:
+            match = sa_weights_info.pop()
+            idx.append(match.pop('state_idx'))
+            sa_weights.append(match.pop('weight'))
+
+        idx = np.argsort(idx)
+        sa_weights = np.asarray(sa_weights)[idx]
+
+        mc_spec['sa_weights'] = sa_weights
 
     tot_elec_info, line = find_pattern_in_file(file, tot_elec_info_patt, first_line=line, default_group_map=int)
     n_elec = (tot_elec_info['n_elec_a'], tot_elec_info['n_elec_b'])
@@ -102,13 +147,10 @@ def read_mc_spec(file: TextIO, /, first_line: str = '') -> tuple[ParsingResult, 
     n_configs_info, line = find_pattern_in_file(file, n_confgis_patt, first_line=line, default_group_map=int)
     n_config = (n_configs_info['n_config_a'], n_configs_info['n_config_b'])
 
-    mc_spec = dict(
-        ras=ras_mo, n_mos=sum(ras_mo),
-        elec=n_elec_act, n_elec=sum(n_elec_act),
-        mo_all=mo, elec_all=n_elec,
-        config=n_config,
-        n_configs=reduce(lambda x, y: x * y, n_config),
-    )
+    mc_spec.update({
+        'elec': n_elec_act, 'n_elec': sum(n_elec_act), 'elec_all': n_elec,
+        'config': n_config, 'n_configs': reduce(lambda x, y: x * y, n_config)
+    })
     return mc_spec, line
 
 
@@ -148,7 +190,7 @@ def read_ci(file: TextIO, n_configs: int, /, max_det: int = 50, first_line: str 
 
         ci_vec_info, line = find_pattern_in_file(file, ci_vec_patt,
                                                  group_maps={'addr': int}, match_funcs={'C': process_complex_match},
-                                                 max_matches=max_det, until_first_failure=True,)
+                                                 max_matches=max_det, until_first_failure=True)
 
         for state_info in ci_vec_info:
             ci_data.append(state_info['C'])
@@ -162,21 +204,42 @@ def read_ci(file: TextIO, n_configs: int, /, max_det: int = 50, first_line: str 
     return dict(df_states=df, ci_vecs=ci_vecs, n_states=n_states), line
 
 
-pdm_start_patt = re.compile(r'\*\* Printing Density Matrices for all States \*\*')
-pdm_diag_patt = re.compile(r'For Simplicity: The diagonals of 1PDM for State:\s*(?P<idx>\d*)')
+rdm_start_patt = re.compile(r'\*\* Printing Density Matrices for all States \*\*')
+rdm_diag_patt = re.compile(r'For Simplicity: The diagonals of 1PDM for State:\s*(?P<idx>\d*)')
 
 
-def read_pdm_diags(file: TextIO, n_states: int, n_mos: int, /, first_line: str = '') -> tuple[ParsingResult, str]:
-    match, line = find_line_in_file(file, pdm_start_patt, first_line=first_line)
+def read_rdm_diags(file: TextIO, n_states: int, n_mos: int, /, first_line: str = '') -> tuple[ParsingResult, str]:
+    match, line = find_line_in_file(file, rdm_start_patt, first_line=first_line)
     if match is None:
         raise ValueError('No PDM information is found')
 
-    pdm_diags: np.ndarray = np.empty((n_states, n_mos), dtype=np.float_)
+    rdm_diags: np.ndarray = np.empty((n_states, n_mos), dtype=np.float_)
     for i in range(n_states):
-        pdm_diag, line = read_matrix_in_file(file, pdm_diag_patt, shape=(n_mos,))
-        pdm_diags[i] = pdm_diag
+        rdm_diag, line = read_matrix_in_file(file, rdm_diag_patt, shape=(n_mos,))
+        rdm_diags[i] = rdm_diag
 
-    return dict(pdm_diags=pdm_diags), line
+    return dict(rdm_diags=rdm_diags), line
+
+
+rdm_real_patt = re.compile('1PDM Matrix \(real\) :')
+rdm_imag_patt = re.compile('1PDM Matrix \(imag\) :')
+
+
+def read_rdms(file: TextIO, n_states: int, n_mos: int, /, first_line: str = '') -> tuple[ParsingResult, str]:
+    match, line = find_line_in_file(file, rdm_start_patt, first_line=first_line)
+    if match is None:
+        raise ValueError('No PDM information is found')
+
+    rdms: np.ndarray = np.zeros((n_states, n_mos, n_mos), dtype=np.complex128)
+    for i in range(n_states):
+        rdm_real, line = read_matrix_in_file(file, rdm_real_patt, shape=(n_mos, n_mos), first_line=line)
+        rdm_imag, line = read_matrix_in_file(file, rdm_imag_patt, shape=(n_mos, n_mos), first_line=line)
+        rdms[i] = rdm_real + rdm_imag * 1.j
+
+    return {
+        'rdms': rdms,
+        'rdm_diags': np.diagonal(rdms, axis1=1, axis2=2)
+    }, line
 
 
 osc_patt_start = re.compile(r'Using Dipole Ints in file:')
@@ -205,9 +268,9 @@ def read_oscillator_strength(file: TextIO, n_states: int, n_ground: int, /,
         osc_strength.append(d['osc'])
 
     df = pd.DataFrame({
-        MCSpectrum.INITIAL_STATE_COL: initial_state,
-        MCSpectrum.FINAL_STATE_COL: final_state,
-        MCSpectrum.OSC_COL: osc_strength
+        MCPeaks.INITIAL_STATE_COL: initial_state,
+        MCPeaks.FINAL_STATE_COL: final_state,
+        MCPeaks.OSC_COL: osc_strength
     })
     return dict(df_peaks=df), line
 
@@ -225,19 +288,26 @@ spin_patt = re.compile(
     r'S=\s*(?P<s>[+\-]?\d*\.\d*)'
 )
 
-
 # TODO: include Spin Parsing
 
 
-l910_parser_funcs: dict[str, list[Callable]] = {
+l910_parser_funcs_general: dict[str, list[Callable]] = {
     'l910': [
         read_mc_spec,
         read_ci,
-        read_pdm_diags,
+        read_rdm_diags,
         read_oscillator_strength
     ],
 }
 
+l910_parser_funcs_rdms: dict[str, list[Callable]] = {
+    'l910': [
+        read_mc_spec,
+        read_ci,
+        read_rdms,
+        read_oscillator_strength,
+    ],
+}
 
 if __name__ == '__main__':
     import os
@@ -245,3 +315,7 @@ if __name__ == '__main__':
     data_dir = os.path.join('..', '..', '..', 'data')
     gdvlog = os.path.join(data_dir, 'example.log')
 
+    with open(gdvlog, 'r') as file:
+        result, line = read_mc_spec(file, gdvlog)
+
+        print(result)

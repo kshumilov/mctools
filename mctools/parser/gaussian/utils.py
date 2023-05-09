@@ -1,14 +1,19 @@
-import inspect
 import re
 import warnings
+
 from itertools import chain
 from typing import TextIO, Callable
 
 import numpy as np
 import numpy.typing as npt
-from scipy import sparse
 
-from ..lib import MatchDict, find_line_in_file, simple_float_tmplt, simple_int_tmplt
+
+from ..lib import (
+    ParsingResult, MatchDict,
+    find_line_in_file,
+    simple_float_tmplt, simple_int_tmplt,
+    parse_file
+)
 
 __all__ = [
     'process_float_match',
@@ -17,17 +22,13 @@ __all__ = [
 
     'bool_map',
 
-    'ParsingResult',
-
     'parse_link',
     'parse_gdvlog',
 ]
 
 bool_map = lambda x: x.capitalize() == 'T'
 
-float_patt = r'(?P<%s>%s(D%s)?)' % (r'%s', simple_float_tmplt, simple_int_tmplt)
-
-ParsingResult = dict[str, np.ndarray | sparse.coo_array]
+float_patt = r'(?P<%s>%s([DE]%s)?)' % (r'%s', simple_float_tmplt, simple_int_tmplt)
 
 
 def process_float_match(match_dict: MatchDict, key: str = 'float_value') -> float:
@@ -106,37 +107,36 @@ def read_matrix_in_file(file: TextIO, header: re.Pattern, first_line: str = '',
 link_start_tmplt = r'\(Enter\s*[/\w\-]*%s\.exe\)'
 
 
-def parse_link(file: TextIO, link: str, funcs: list[Callable], result: ParsingResult, /,
+def parse_link(file: TextIO, link: str, read_funcs: list[Callable], result: ParsingResult, /,
                first_line: str = '') -> tuple[ParsingResult, str]:
     link_start_patt = re.compile(link_start_tmplt % link)
-
     match, line = find_line_in_file(file, link_start_patt, first_line=first_line)
     if match is None:
         raise ValueError(f'No link {link} information is found')
 
-    for func in funcs:
-        args = []
-        for param, info in inspect.signature(func).parameters.items():
-            if param in {'file', 'first_line'}:
-                continue
-            elif info.kind == info.POSITIONAL_OR_KEYWORD or info.kind == info.KEYWORD_ONLY:
-                continue
+    # for func in read_funcs:
+    #     args = []
+    #     for param, info in inspect.signature(func).parameters.items():
+    #         if param in {'file', 'first_line'}:
+    #             continue
+    #         elif info.kind == info.POSITIONAL_OR_KEYWORD or info.kind == info.KEYWORD_ONLY:
+    #             continue
+    #
+    #         # TODO: generalize to read kwargs too
+    #         if param in result:
+    #             args.append(result[param])
+    #         else:
+    #             print(f'Skipping: {func.__name__}, parameter {param} is unavailable')
+    #             break
+    #     else:
+    #         try:
+    #             print(f'Executing: {func.__name__}')
+    #             data, line = func(file, *args, first_line=line)
+    #             result.update(data)
+    #         except ValueError as err:
+    #             warnings.warn(err.args[0])
 
-            # TODO: generalize to read kwargs too
-            if param in result:
-                args.append(result[param])
-            else:
-                print(f'Skipping: {func.__name__}, parameter {param} is unavailable')
-                break
-        else:
-            try:
-                print(f'Executing: {func.__name__}')
-                data, line = func(file, *args, first_line=line)
-                result.update(data)
-            except ValueError as err:
-                warnings.warn(err.args[0])
-
-    return result, line
+    return parse_file(file, read_funcs, result, first_line=line)
 
 
 def parse_gdvlog(filename: str, links: dict[str, list[Callable]], /, **kwargs) -> ParsingResult:

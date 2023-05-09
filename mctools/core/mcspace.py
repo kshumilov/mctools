@@ -24,7 +24,6 @@ class MCSpace:
         graph: RASGraph instance --- provides CI string manipulation routines
         df: pd.DataFrame --- stores definitions of MOBlocks and ConfigClasses
 
-
     TODO: rewrite file saving using hdf5 format
     TODO: save config_class lookup
     """
@@ -65,24 +64,24 @@ class MCSpace:
         if config_classes is not None:
             self.set_config_classes(config_classes)
 
-    def partition_pdm_diag(self, pdm_diag: np.ndarray, /, mo_blocks: list[str] | None = None) -> pd.DataFrame:
-        """Partitions PDM diagonal based on user defined spaces.
+    def partition_rdm_diag(self, rdm_diag: np.ndarray, /, mo_blocks: list[str] | None = None) -> pd.DataFrame:
+        """Partitions RDM diagonal based on user defined spaces.
 
         Parameters:
-            pdm_diag: np.ndarray -- must be of the dimensions (#States, #MO)
+            rdm_diag: np.ndarray -- must be of the dimensions (#States, #MO)
             mo_blocks: Optional list of MOs to partition on. MO labels that are not in MO Blocks are ignored.
         """
         if not self.are_mo_blocks_set:
             raise ValueError('Set MO Blocks first.')
 
-        pdm_diag = np.asarray(pdm_diag)
+        rdm_diag = np.asarray(rdm_diag)
 
         if mo_blocks is None:
             occ_list = self.df[self.MO_OCC_COL]
         else:
             occ_list = self.df.loc[mo_blocks, self.MO_OCC_COL]
 
-        return occ_list.dot(pdm_diag.T).T
+        return occ_list.dot(rdm_diag.T).T
 
     def partition_ci_vec(self, ci_vec: sparse.csr_array, /,
                          coefficient_col: str = 'C', state_col: str = 'state',

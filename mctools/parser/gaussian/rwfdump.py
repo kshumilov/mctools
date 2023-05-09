@@ -90,7 +90,7 @@ def read_ci_vectors(filename: str, n_vecs: int, n_det: int,
     row_idx = np.zeros(n_vecs * max_ndet, dtype=np.uint64)
     col_idx = np.zeros(n_vecs * max_ndet, dtype=np.uint64)
 
-    norm_cutoff = 1 - norm_error
+    norm_cutoff = 1. - norm_error
     n_data = 0  # Number of elements currently stored in data array
     n_vecs_read = 0  # Number of vectors processed and stored in data array
 

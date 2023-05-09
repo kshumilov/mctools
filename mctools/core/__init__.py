@@ -1,3 +1,4 @@
 from .mcspace import MCSpace
 from .mcstates import MCStates
-from .mcspectrum import MCSpectrum
+from .mcpeaks import MCPeaks
+from .mo import *
