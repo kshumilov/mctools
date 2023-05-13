@@ -292,25 +292,33 @@ class MCStates(Consolidator):
     def estimate_state_degeneracy(self, tol: float = 1e-3,
                                   idx: npt.ArrayLike | None = None, condition: Selector | None = None,
                                   save: bool = True, replace: bool = True,
-                                  col_name: str = DEGENERACY_COL) -> pd.DataFrame | None:
-        """
+                                  col_name: str = DEGENERACY_COL, **kwargs) -> pd.DataFrame | None:
+        """Estimates state degeneracy based on state energy and assign degeneracy class, g. States with the same
+         degeneracy class are considered the degenerate.
 
         Args:
-            tol:
-            idx:
-            condition:
-            save:
-            replace:
+            tol: Energy tolerance, in Hartree, above which states are considered different.
+            idx: Sequence of states indices that are passed to cond() before analysis, see .filter() method.
+            condition: Predicate to select state that are analyzed. See .filter() method.
+            save: Whether to save result locally (save=True) onto self.df using self.update_properties(),
+                or return calculated result directly without changing local df (False).
+            replace: If save=True, choose to either append new properties as new columns (replace=False) or replace old
+                columns with new result if duplicate columns are found (replace=False).
             col_name:
 
         Returns:
-
+            if save=True:
+                pd.DataFrame with calculated degeneracies for selected states.
+            else:
+                None
         """
         idx = self.filter(idx=idx, condition=condition)
 
         dE = self._df.loc[self._df.index[idx], self.ENERGY_COL].diff()
         dE.fillna(0, inplace=True)
-        df = pd.DataFrame({col_name: (dE > tol).cumsum()})
+        g = (dE > tol).cumsum()
+
+        df = pd.DataFrame({col_name: g})
 
         if not save:
             return df
