@@ -200,7 +200,7 @@ def read_ci(file: TextIO, n_configs: int, /, max_det: int = 50, first_line: str 
     n_states = max(state_idx)
     ci_vecs = sparse.coo_array((ci_data, (row_idx, col_idx)), shape=(n_states, n_configs))
 
-    df = pd.DataFrame({MCStates.E_COL: energy, MCStates.STATE_COL: state_idx})
+    df = pd.DataFrame({MCStates.ENERGY_COL: energy, MCStates.STATE_COL: state_idx})
     return dict(df_states=df, ci_vecs=ci_vecs, n_states=n_states), line
 
 

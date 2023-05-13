@@ -165,11 +165,11 @@ class MCPeaks(Consolidator):
         if not self.are_states_set:
             raise ValueError("'states' attribute must be set to calculate peak energy")
 
-        df = self.get_state_properties([self.states.E_COL], save=False)
+        df = self.get_state_properties([self.states.ENERGY_COL], save=False)
 
         # dE = E_f - E_i
-        i_col = f'{self.states.E_COL}_{self.INITIAL_COL}'
-        f_col = f'{self.states.E_COL}_{self.FINAL_COL}'
+        i_col = f'{self.states.ENERGY_COL}_{self.INITIAL_COL}'
+        f_col = f'{self.states.ENERGY_COL}_{self.FINAL_COL}'
         df[self.DE_COL] = df[f_col] - df[i_col]
         df.drop(columns=[i_col, f_col], inplace=True)
 

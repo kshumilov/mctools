@@ -40,7 +40,7 @@ class MCStates(Consolidator):
     Possible columns on df:
         SOURCE_COL: file from which the state originates;
         STATE_COL: index of the state as defined in the `source`;
-        E_COL: Energy of the state in Hartree;
+        ENERGY_COL: Energy of the state in Hartree;
 
         IDX_COLS: list of columns used to uniquely identify states;
         DEFAULT_COLS: list of permanent columns on `df` for MCStates object to be valid;
@@ -54,7 +54,7 @@ class MCStates(Consolidator):
         TODO: include duplicate and similar
         TODO: Move _state_map to RESOURCE_COL
     """
-    E_COL = 'E'
+    ENERGY_COL = 'E'
     DEGENERACY_COL = 'g'
     STATE_COL = 'state'
     SOURCE_COL = 'state_source'
@@ -122,9 +122,9 @@ class MCStates(Consolidator):
         # self.df['resource_idx'] = self._state_map
 
         if sort:
-            self.sort(self.E_COL)
+            self.sort(self.ENERGY_COL)
 
-    def sort(self, col: str = E_COL) -> NoReturn:
+    def sort(self, col: str = ENERGY_COL) -> NoReturn:
         idx = np.argsort(self._df[col].values)
         self._state_map = self._state_map[idx]
         self._df = self._df.iloc[idx]
@@ -178,7 +178,7 @@ class MCStates(Consolidator):
             warnings.warn(err.args[0])
 
         if not save:
-            return pd.concat([self._df[self.E_COL], *dfs], axis=1)
+            return pd.concat([self._df[self.ENERGY_COL], *dfs], axis=1)
 
         if self.peaks is not None:
             self.peaks.analyze(save=True)
@@ -307,7 +307,7 @@ class MCStates(Consolidator):
         """
         idx = self.filter(idx=idx, condition=condition)
 
-        dE = self._df.loc[self._df.index[idx], self.E_COL].diff()
+        dE = self._df.loc[self._df.index[idx], self.ENERGY_COL].diff()
         dE.fillna(0, inplace=True)
         df = pd.DataFrame({col_name: (dE > tol).cumsum()})
 
@@ -354,7 +354,7 @@ class MCStates(Consolidator):
                     elif strategy == 'append':
                         self.append(other[sl2], ignore_space=ignore_space, reset_index=False)
 
-        self.sort(self.E_COL)
+        self.sort(self.ENERGY_COL)
 
     def append(self, other: 'MCStates', ignore_space: bool = False, reset_index: bool = True) -> NoReturn:
         """Extends the current MCStates with provided one.
@@ -590,7 +590,7 @@ class MCStates(Consolidator):
 
         idx = self.filter(idx=idx, condition=condition)
 
-        E = self._df.loc[idx, self.E_COL] - (self.min_energy * shift_ground)
+        E = self._df.loc[idx, self.ENERGY_COL] - (self.min_energy * shift_ground)
 
         mo_block_labels = [m for m in self.space.mo_block_labels if m in self._df] if include_mo else []
         df_rdm = self._df.loc[idx, mo_block_labels].apply(
@@ -686,15 +686,15 @@ class MCStates(Consolidator):
 
     @property
     def E(self) -> np.ndarray:
-        return self._df[self.E_COL].values
+        return self._df[self.ENERGY_COL].values
 
     @property
     def min_energy(self) -> float:
-        return float(self._df[self.E_COL].min())
+        return float(self._df[self.ENERGY_COL].min())
 
     @property
     def max_energy(self) -> float:
-        return float(self._df[self.E_COL].max())
+        return float(self._df[self.ENERGY_COL].max())
 
     @property
     def energy_range(self) -> tuple[float, float]:
