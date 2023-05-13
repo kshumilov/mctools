@@ -55,6 +55,7 @@ class MCStates(Consolidator):
         TODO: Move _state_map to RESOURCE_COL
     """
     ENERGY_COL = 'E'
+    RELATIVE_ENERGY_COL = 'E0'
     DEGENERACY_COL = 'g'
     STATE_COL = 'state'
     CI_NORM_COL = 'norm'
@@ -141,6 +142,7 @@ class MCStates(Consolidator):
         """Performs analysis of states, using the following functions:
             - estimate_state_degeneracy
             - calculate_ci_vec_norm
+            - calculate_relative_energy
             - partition_rdm_diag
             - partition_ci_vec
             - estimate_dominant_config_class
@@ -171,6 +173,7 @@ class MCStates(Consolidator):
 
         dfs = [
             self.estimate_state_degeneracy(**kwargs, idx=idx, condition=condition, save=save, replace=replace),
+            self.calculate_relative_energy(**kwargs, idx=idx, condition=condition, save=save, replace=replace),
             self.calculate_ci_vec_norm(**kwargs, idx=idx, condition=condition, save=save, replace=replace),
         ]
 
@@ -340,6 +343,28 @@ class MCStates(Consolidator):
         config_class = self._df.loc[self._df.index[idx], self.space.config_classes.keys()].idxmax(axis=1)
 
         df = pd.DataFrame({col_name: config_class})
+
+        if not save:
+            return df
+
+        self.update_properties(df, replace=replace)
+
+    def calculate_relative_energy(self: 'MCStates', in_eV: bool = True, E_min: float | None = None,
+                                  idx: npt.ArrayLike | None = None, condition: Selector | None = None,
+                                  save: bool = True, replace: bool = True,
+                                  col_name: str = RELATIVE_ENERGY_COL, **kwargs) -> pd.DataFrame | None:
+        from .constants import Eh2eV
+
+        idx = self.filter(idx=idx, condition=condition)
+
+        E = self._df.loc[self._df.index[idx], self.ENERGY_COL]
+        E_min = E_min if E_min is not None else E.min()
+        E0 = E - E_min
+
+        if in_eV:
+            E0 *= Eh2eV
+
+        df = pd.DataFrame({col_name: E0})
 
         if not save:
             return df
