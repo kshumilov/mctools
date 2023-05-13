@@ -57,6 +57,7 @@ class MCStates(Consolidator):
     ENERGY_COL = 'E'
     DEGENERACY_COL = 'g'
     STATE_COL = 'state'
+    CI_NORM_COL = 'norm'
     SOURCE_COL = 'state_source'
     RESOURCE_COL = 'resource_idx'  # index of related resource in ci_vecs and rdm_diag, see _state_map
 
@@ -252,7 +253,7 @@ class MCStates(Consolidator):
         self.update_properties(df, replace=replace)
 
     def calculate_ci_vec_norm(self, idx: npt.ArrayLike | None = None, condition: Selector | None = None,
-                              save: bool = True, replace: bool = False, col_name: str = 'norm', **kwargs):
+                              save: bool = True, replace: bool = False, col_name: str = CI_NORM_COL, **kwargs):
         """Calculates norm of CI vector for selected states.
 
         norm = sqrt(Sum_i[C_i^h * C_i * <Det_i|Det_i>])
