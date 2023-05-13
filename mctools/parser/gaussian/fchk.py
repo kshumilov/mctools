@@ -9,6 +9,8 @@ from ..lib import (
     find_pattern_in_file,
     find_pattern_in_line,
 
+    PatternNotFound,
+
     simple_int_tmplt,
     simple_float_tmplt,
 
@@ -33,7 +35,7 @@ def read_fchk_scalar(file: TextIO, header: str, /, first_line: str = '') -> tupl
                       (header, simple_int_tmplt, simple_float_tmplt))
     match, line = find_pattern_in_file(file, patt, first_line=first_line, group_maps={'N': int})
     if match is None:
-        raise ValueError(f"Couldn't find header: {header}")
+        raise PatternNotFound(f"Couldn't find FCHK scalar: {header}", line=line)
 
     match match.pop('data_type'):
         case 'R':
@@ -68,6 +70,12 @@ def read_fchk_array(file: TextIO, header: str, /, first_line='') -> tuple[np.nda
             data_type = np.int64
         case _:
             raise ValueError('Invalid data_type')
+
+    arr = []
+    N = match.pop('N')
+    while len(arr) < N:
+        line = file.readline()
+        arr.extend(line.split())
 
     arr = np.asarray(arr, dtype=data_type)
     return arr, line

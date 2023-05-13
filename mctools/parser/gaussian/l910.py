@@ -13,6 +13,7 @@ from mctools.core import MCStates, MCPeaks
 from ..lib import (
     find_line_in_file,
     find_pattern_in_file,
+    PatternNotFound,
 
     ParsingResult,
 
@@ -97,7 +98,7 @@ n_confgis_patt = re.compile(r'Alpha Strings=\s*%s\s*Beta Strings=\s*%s\s*' % (
 def read_mc_spec(file: TextIO, /, first_line: str = '') -> tuple[ParsingResult, str]:
     match, line = find_line_in_file(file, mc_spec_start_patt, first_line=first_line)
     if match is None:
-        raise ValueError('No MCSCF Specification is found')
+        raise PatternNotFound('No MCSCF Specification is found', line=line)
 
     mc_spec = {}
 
@@ -168,7 +169,7 @@ ci_vec_patt = re.compile(r'\(\s*(?P<addr>\d*)\)\s*%s' % ci_complex_patt)
 def read_ci(file: TextIO, n_configs: int, /, max_det: int = 50, first_line: str = '') -> tuple[ParsingResult, str]:
     match, line = find_line_in_file(file, mc_done_patt, first_line=first_line)
     if match is None or not line:
-        raise ValueError('No state information is found')
+        raise PatternNotFound('No state information is found', line=line)
 
     # State energy info
     energy: list[float] = []
@@ -211,7 +212,7 @@ rdm_diag_patt = re.compile(r'For Simplicity: The diagonals of 1PDM for State:\s*
 def read_rdm_diags(file: TextIO, n_states: int, n_mos: int, /, first_line: str = '') -> tuple[ParsingResult, str]:
     match, line = find_line_in_file(file, rdm_start_patt, first_line=first_line)
     if match is None:
-        raise ValueError('No PDM information is found')
+        raise PatternNotFound('No RDM information is found', line=line)
 
     rdm_diags: np.ndarray = np.empty((n_states, n_mos), dtype=np.float_)
     for i in range(n_states):
@@ -252,7 +253,7 @@ def read_oscillator_strength(file: TextIO, n_states: int, n_ground: int, /,
                              first_line: str = '') -> tuple[ParsingResult, str]:
     match, line = find_line_in_file(file, osc_patt_start, first_line=first_line)
     if match is None:
-        raise ValueError('No Oscillator information is found')
+        raise PatternNotFound('No Oscillator information is found', line=line)
 
     osc_info, line = find_pattern_in_file(file, osc_patt,
                                           first_line=line, max_matches=n_states * n_ground,

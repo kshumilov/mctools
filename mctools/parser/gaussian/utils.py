@@ -12,7 +12,7 @@ from ..lib import (
     ParsingResult, MatchDict,
     find_line_in_file,
     simple_float_tmplt, simple_int_tmplt,
-    parse_file
+    parse_file, PatternNotFound
 )
 
 __all__ = [
@@ -53,7 +53,7 @@ def read_matrix_in_file(file: TextIO, header: re.Pattern, first_line: str = '',
     # Finding matrix by header
     match, line = find_line_in_file(file, header, first_line=first_line)
     if match is None:
-        raise ValueError(f"Couldn't find {header.pattern}")
+        raise PatternNotFound(f"Couldn't find matrix header: {header.pattern}", line=line)
 
     cols_idx: list[int] = []
     raw_matrix: list[list[str]] = []
@@ -112,29 +112,7 @@ def parse_link(file: TextIO, link: str, read_funcs: list[Callable], result: Pars
     link_start_patt = re.compile(link_start_tmplt % link)
     match, line = find_line_in_file(file, link_start_patt, first_line=first_line)
     if match is None:
-        raise ValueError(f'No link {link} information is found')
-
-    # for func in read_funcs:
-    #     args = []
-    #     for param, info in inspect.signature(func).parameters.items():
-    #         if param in {'file', 'first_line'}:
-    #             continue
-    #         elif info.kind == info.POSITIONAL_OR_KEYWORD or info.kind == info.KEYWORD_ONLY:
-    #             continue
-    #
-    #         # TODO: generalize to read kwargs too
-    #         if param in result:
-    #             args.append(result[param])
-    #         else:
-    #             print(f'Skipping: {func.__name__}, parameter {param} is unavailable')
-    #             break
-    #     else:
-    #         try:
-    #             print(f'Executing: {func.__name__}')
-    #             data, line = func(file, *args, first_line=line)
-    #             result.update(data)
-    #         except ValueError as err:
-    #             warnings.warn(err.args[0])
+        raise PatternNotFound(f'No link {link} information is found', line=line)
 
     return parse_file(file, read_funcs, result, first_line=line)
 
@@ -148,12 +126,8 @@ def parse_gdvlog(filename: str, links: dict[str, list[Callable]], /, **kwargs) -
         line = ''
         for link, funcs in links.items():
             print(f'Parsing link {link}')
-            try:
-                data, line = parse_link(file, link, funcs, result, first_line=line)
-                result.update(data)
-            except ValueError as err:
-                warnings.warn(err.args[0])
-
+            data, line = parse_link(file, link, funcs, result, first_line=line)
+            result.update(data)
     return result
 
 

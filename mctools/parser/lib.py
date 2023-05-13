@@ -24,6 +24,8 @@ __all__ = [
     'simple_int_tmplt',
     'simple_float_tmplt',
     'simple_bool_tmplt',
+
+    'PatternNotFound',
 ]
 
 
@@ -41,6 +43,12 @@ grouped_tmplt = r'(?P<%s>%s)'
 simple_float_tmplt = r'[+\-]?\d*\.\d*'
 simple_int_tmplt = r'[+\-]?\d+'
 simple_bool_tmplt = r'[tTfF]'
+
+
+class PatternNotFound(Exception):
+    def __init__(self, *args, line: str = ""):
+        super(PatternNotFound, self).__init__(*args)
+        self.line = line
 
 
 def transform_match_groups(match: re.Match, group_maps: Optional[GroupMaps] = None,
@@ -176,8 +184,8 @@ def parse_file(file: TextIO, read_funcs: list[Callable], result: ParsingResult, 
                 data, line = func(file, *args, first_line=line)
                 result.update(data)
                 print(' --- Done')
-            except ValueError as err:
-                print(' --- Issued Warning')
+            except PatternNotFound as err:
+                print(' --- Could not find pattern')
                 warnings.warn(*err.args)
 
     return result, line
