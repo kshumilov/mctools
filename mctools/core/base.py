@@ -9,15 +9,38 @@ import numpy as np
 import numpy.typing as npt
 
 __all__ = [
-    'MCBase',
-    'Selector'
+    'Consolidator',
+    'Selector',
 ]
 
 
 Selector = Callable[[pd.DataFrame], bool]
 
 
-class MCBase(abc.ABC):
+class Consolidator(abc.ABC):
+    """Defines the Interface for a class that consolidates a group of entries
+    and their respective properties into a table.
+
+    The table is stored in the Pandas DataFrame format. The columns of the
+    dataframe are divided into two kinds:
+        - IDX_COLS: Columns that are used to uniquely identify entries in the
+            table. Usually includes the SOURCE_COL — the name of the file
+            from which the data was obtained, and some additional columns.
+        - Property columns: All other columns that are present in the dataframe,
+            but are not used for indexing, and a result of additional
+            calculations or data manipulations.
+        - DEFAULT_COLS: Property columns that must be present in the dataframe,
+            for it to be valid.
+
+    Class Attributes:
+        IDX_NAME: name of the index in the _df.
+        SOURCE_COL: name of the colum defining the source on an entry.
+        IDX_COLS: See above.
+        DEFAULT_COLS: See above.
+
+    Attributes:
+        _df: The table is stored in the Pandas DataFrame format.
+    """
     IDX_NAME = 'idx'
     SOURCE_COL = 'source'
 
@@ -31,17 +54,17 @@ class MCBase(abc.ABC):
     _df: pd.DataFrame
 
     @abc.abstractmethod
-    def analyze(self: 'MCBase', idx: npt.ArrayLike | None = None, condition: Selector | None = None,
+    def analyze(self: 'Consolidator', idx: npt.ArrayLike | None = None, condition: Selector | None = None,
                 save=True, replace=False) -> pd.DataFrame | None:
         pass
 
-    def sort(self: 'MCBase', col: str = '') -> NoReturn:
+    def sort(self: 'Consolidator', col: str = '') -> NoReturn:
         if col in self._df:
             self._df.sort_values(col, ignore_index=True, inplace=True)
 
         self.reset_index()
 
-    def filter(self: 'MCBase', idx: npt.ArrayLike | None = None, condition: Selector | None = None,
+    def filter(self: 'Consolidator', idx: npt.ArrayLike | None = None, condition: Selector | None = None,
                label_index: bool = False) -> np.ndarray | pd.Index:
         """Filter entries on positional integer index and some condition.
 
@@ -71,21 +94,21 @@ class MCBase(abc.ABC):
         return idx[selected]
 
     @property
-    def df(self: 'MCBase') -> pd.DataFrame:
+    def df(self: 'Consolidator') -> pd.DataFrame:
         return self._df
 
     @df.setter
     def df(self, new_df: pd.DataFrame) -> NoReturn:
         self._df = self.validate_df(new_df)
 
-    def validate_df(self: 'MCBase', new_df: pd.DataFrame) -> pd.DataFrame:
+    def validate_df(self: 'Consolidator', new_df: pd.DataFrame) -> pd.DataFrame:
         for col in self.DEFAULT_COLS:
             if col not in new_df:
                 raise ValueError(f"'df' must have {col}")
 
         return new_df
 
-    def update_properties(self: 'MCBase', new_df: pd.DataFrame, replace: bool = False) -> NoReturn:
+    def update_properties(self: 'Consolidator', new_df: pd.DataFrame, replace: bool = False) -> NoReturn:
         cols = set(new_df.columns)  # Columns on new_df that can be added
         duplicate_cols = cols & self.property_columns  # Columns that exist in both new_df and self.df
 
@@ -97,17 +120,17 @@ class MCBase(abc.ABC):
         self._df = pd.concat([self._df, new_df[list(new_cols)]], axis=1, copy=False)
         self._df.update(new_df[list(duplicate_cols)])
 
-    def clear_properties(self: 'MCBase') -> NoReturn:
+    def clear_properties(self: 'Consolidator') -> NoReturn:
         self._df.drop(columns=list(self.property_columns), inplace=True)
 
     @property
-    def property_columns(self: 'MCBase') -> set[str]:
+    def property_columns(self: 'Consolidator') -> set[str]:
         """Property columns that exist on self.df"""
         return set(self._df.columns) - set(self.DEFAULT_COLS)
 
-    def reset_index(self: 'MCBase') -> NoReturn:
+    def reset_index(self: 'Consolidator') -> NoReturn:
         self._df.reset_index(drop=True, inplace=True)
         self._df.index.name = self.IDX_NAME
 
-    def __len__(self: 'MCBase') -> int:
+    def __len__(self: 'Consolidator') -> int:
         return len(self._df)

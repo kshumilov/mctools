@@ -5,7 +5,7 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
-from .base import MCBase
+from .base import Consolidator
 from .mcspace import MCSpace
 from .mcstates import MCStates
 
@@ -16,7 +16,7 @@ __all__ = [
 ]
 
 
-class MCPeaks(MCBase):
+class MCPeaks(Consolidator):
     """Holds information about multiconfigurational peaks.
 
      Attributes:

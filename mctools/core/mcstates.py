@@ -14,7 +14,7 @@ import pandas as pd
 
 from scipy import sparse
 
-from .base import MCBase
+from .base import Consolidator
 
 
 __all__ = [
@@ -26,7 +26,7 @@ __all__ = [
 Selector = Callable[[pd.DataFrame], bool]
 
 
-class MCStates(MCBase):
+class MCStates(Consolidator):
     """Holds information about multiconfigurational states.
 
     Attributes:
