@@ -58,6 +58,7 @@ class MCStates(Consolidator):
     DEGENERACY_COL = 'g'
     STATE_COL = 'state'
     CI_NORM_COL = 'norm'
+    DOMINANT_CONFIG_COL = 'config_class'
     SOURCE_COL = 'state_source'
     RESOURCE_COL = 'resource_idx'  # index of related resource in ci_vecs and rdm_diag, see _state_map
 
@@ -142,6 +143,7 @@ class MCStates(Consolidator):
             - calculate_ci_vec_norm
             - partition_rdm_diag
             - partition_ci_vec
+            - estimate_dominant_config_class
 
         Notes:
             Before performing the analysis all previously calculated properties are cleared.
@@ -175,6 +177,7 @@ class MCStates(Consolidator):
         try:
             dfs.append(self.partition_rdm_diag(idx=idx, condition=condition, save=save, replace=replace))
             dfs.append(self.partition_ci_vec(idx=idx, condition=condition, save=save, replace=replace))
+            dfs.append(self.estimate_dominant_config_class(idx=idx, condition=condition, save=save, replace=replace))
         except ValueError as err:
             warnings.warn(err.args[0])
 
@@ -319,6 +322,24 @@ class MCStates(Consolidator):
         g = (dE > tol).cumsum()
 
         df = pd.DataFrame({col_name: g})
+
+        if not save:
+            return df
+
+        self.update_properties(df, replace=replace)
+
+    def estimate_dominant_config_class(self: 'MCStates',
+                                       idx: npt.ArrayLike | None = None, condition: Selector | None = None,
+                                       save: bool = True, replace: bool = False,
+                                       col_name: str = DOMINANT_CONFIG_COL, **kwargs) -> pd.DataFrame | None:
+        if not (self.is_space_set and self.space.are_config_classes_set):
+            raise ValueError('Set configuration classes on MCSpace first.')
+
+        idx = self.filter(idx=idx, condition=condition)
+
+        config_class = self._df.loc[self._df.index[idx], self.space.config_classes.keys()].idxmax(axis=1)
+
+        df = pd.DataFrame({col_name: config_class})
 
         if not save:
             return df
