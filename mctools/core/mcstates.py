@@ -15,6 +15,7 @@ import pandas as pd
 from scipy import sparse
 
 from .base import Consolidator
+from .constants import Eh2eV
 
 
 __all__ = [
@@ -349,20 +350,16 @@ class MCStates(Consolidator):
 
         self.update_properties(df, replace=replace)
 
-    def calculate_relative_energy(self: 'MCStates', in_eV: bool = True, E_min: float | None = None,
+    def calculate_relative_energy(self: 'MCStates', scale: float = Eh2eV, E_min: float | None = None,
                                   idx: npt.ArrayLike | None = None, condition: Selector | None = None,
                                   save: bool = True, replace: bool = True,
                                   col_name: str = RELATIVE_ENERGY_COL, **kwargs) -> pd.DataFrame | None:
-        from .constants import Eh2eV
-
         idx = self.filter(idx=idx, condition=condition)
 
-        E = self._df.loc[self._df.index[idx], self.ENERGY_COL]
-        E_min = E_min if E_min is not None else E.min()
-        E0 = E - E_min
-
-        if in_eV:
-            E0 *= Eh2eV
+        E0 = self._df.loc[self._df.index[idx], self.ENERGY_COL]
+        E_min = E_min if E_min is not None else E0.min()
+        E0 -= E_min
+        E0 *= scale
 
         df = pd.DataFrame({col_name: E0})
 

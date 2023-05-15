@@ -1,15 +1,20 @@
 import warnings
 
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 from .base import Consolidator
 from .mcspace import MCSpace
 from .mcstates import MCStates
+from .constants import Eh2eV
 
 # from .utils import get_state_alignment, get_state_map_from_alignment, StateAlignment
+
+if TYPE_CHECKING:
+    from .base import Selector
 
 __all__ = [
     'MCPeaks',
@@ -45,6 +50,7 @@ class MCPeaks(Consolidator):
     FINAL_COL = 'f'
     OSC_COL = 'osc'
     DE_COL = 'dE'
+    RELATIVE_DE_COL = 'dE0'
 
     SOURCE_SUFFIX = 'state'
     INITIAL_STATE_COL = f'{INITIAL_COL}_{SOURCE_SUFFIX}'
@@ -172,6 +178,26 @@ class MCPeaks(Consolidator):
         f_col = f'{self.states.ENERGY_COL}_{self.FINAL_COL}'
         df[self.DE_COL] = df[f_col] - df[i_col]
         df.drop(columns=[i_col, f_col], inplace=True)
+
+        if not save:
+            return df
+
+        self.update_properties(df, replace=replace)
+
+    def calculate_relative_energy(self: 'MCPeaks', scale: float = Eh2eV, offset: float = 0.0,
+                                  idx: npt.ArrayLike | None = None, condition: Selector | None = None,
+                                  save: bool = True, replace: bool = True,
+                                  col_name: str = RELATIVE_DE_COL, **kwargs) -> pd.DataFrame | None:
+        if self.DE_COL not in self.property_columns:
+            raise ValueError(f'{self.DE_COL} is missing from properties, calculate it first')
+
+        idx = self.filter(idx=idx, condition=condition)
+
+        dE0 = self._df.loc[self._df.index[idx], self.DE_COL]
+        dE0 *= scale
+        dE0 += offset  # offset is in the units of Energy * Scale
+
+        df = pd.DataFrame({col_name: dE0})
 
         if not save:
             return df
