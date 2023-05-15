@@ -1,11 +1,10 @@
+from __future__ import annotations
+
 from typing import Callable
 
-import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 
-
-from ..core import MCPeaks
 
 __all__ = [
     'lorentizian',
@@ -24,21 +23,25 @@ def lorentizian(x: npt.ArrayLike, x0: float, fwhm: float) -> np.ndarray:
     return 1 / (1 + y ** 2)
 
 
-def get_peaks_broadening(peak: npt.ArrayLike, height: npt.ArrayLike, broadening_func: BroadeningFunc = lorentizian,
+def get_peaks_broadening(x_position: npt.ArrayLike, y_height: npt.ArrayLike,
+                         broadening_func: BroadeningFunc = lorentizian,
                          x_range: tuple[float, float] | None = None, resolution: float | None = None,
                          fwhm: float = 0.1) -> (np.ndarray, np.ndarray):
-    peak: np.ndarray = np.asarray(peak, dtype=np.float_).reshape(-1)
-    height: np.ndarray = np.asarray(height, dtype=np.float_).reshape(-1)
+    # Flatten arrays
+    x_position: np.ndarray = np.asarray(x_position, dtype=np.float_).reshape(-1)
+    y_height: np.ndarray = np.asarray(y_height, dtype=np.float_).reshape(-1)
 
-    assert peak.shape == height.shape
+    if x_position.shape != y_height.shape:
+        raise ValueError(f"Shapes of position and height of peaks must be equal: "
+                         f"{x_position.shape} != {y_height.shape}")
 
-    x_min, x_max = x_range if x_range else (peak.min() - fwhm, peak.max() + fwhm)
+    x_min, x_max = x_range if x_range else (x_position.min() - fwhm, x_position.max() + fwhm)
     resolution = resolution if resolution else fwhm / 10
 
     x = np.arange(x_min, x_max, resolution)
     y = np.zeros_like(x)
 
-    for x0, h in zip(peak, height):
+    for x0, h in zip(x_position, y_height):
         y += h * broadening_func(x, x0, fwhm)
 
     return x, y

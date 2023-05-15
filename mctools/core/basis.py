@@ -4,7 +4,7 @@ from .molecule import Molecule
 
 
 __all__ = [
-     "Basis",
+    'Basis',
 ]
 
 

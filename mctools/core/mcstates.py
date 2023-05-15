@@ -2,11 +2,7 @@ from __future__ import annotations
 
 import warnings
 
-from typing import NoReturn, Callable, Any, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .mcpeaks import MCPeaks
-    from .mcspace import MCSpace, ConfigTransform
+from typing import NoReturn, TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
@@ -16,6 +12,13 @@ from scipy import sparse
 
 from .base import Consolidator
 from .constants import Eh2eV
+
+
+if TYPE_CHECKING:
+    from .base import Selector
+    from .mcpeaks import MCPeaks
+    from .mcspace import MCSpace, ConfigTransform
+    from ..parser.lib import ParsingResult
 
 
 __all__ = [
@@ -191,10 +194,11 @@ class MCStates(Consolidator):
             else:
                 None
         """
-        if self.space is None:
+        if not self.is_space_set:
             raise ValueError('Set MCSpace first')
 
         idx = self.filter(idx=idx, condition=condition)
+
         df = self.space.partition_rdm_diag(self.rdm_diags[self._state_map[idx]])
         df.set_index(self._df.index[idx], inplace=True)
 
@@ -225,10 +229,11 @@ class MCStates(Consolidator):
             else:
                 None
         """
-        if self.space is None:
+        if not self.is_space_set:
             raise ValueError('Set MCSpace first')
 
         idx = self.filter(idx=idx, condition=condition)
+
         df = self.space.partition_ci_vec(self.ci_vecs[self._state_map[idx]])
         df.set_index(self._df.index[idx], inplace=True)
 
@@ -262,7 +267,7 @@ class MCStates(Consolidator):
             else:
                 None
         """
-        if self.space is None:
+        if not self.is_space_set:
             raise ValueError('Set MCSpace first')
 
         idx = self.filter(idx=idx, condition=condition)
@@ -348,7 +353,7 @@ class MCStates(Consolidator):
         self.update_properties(df, replace=replace)
 
     def find_similar(self, other: 'MCStates', /, ignore_space: bool = False) -> tuple[np.ndarray, np.ndarray]:
-        if not ignore_space and (self.space is None or other.space is None):
+        if not ignore_space and not (self.is_space_set and other.is_space_set):
             warnings.warn('At least one of MCStates does not have well defined MCSpace, proceed with caution')
 
         if not ignore_space and self.space != other.space:
@@ -521,7 +526,7 @@ class MCStates(Consolidator):
             space=self.space,
         )
 
-        if self.peaks is not None:
+        if self.are_peaks_set:
             warnings.warn('Slicing MCStates with peaks assigned is not tested')
 
             preserve_key = new_df.index.values
@@ -674,7 +679,7 @@ class MCStates(Consolidator):
             print('=' * BAR_WIDTH)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], /,
+    def from_dict(cls, data: ParsingResult, /,
                   df_key: str = 'df_states',
                   ci_vecs_key: str = 'ci_vecs',
                   rdm_diags_key: str = 'rdm_diags',
@@ -718,6 +723,14 @@ class MCStates(Consolidator):
                              "'ci_vecs' array, and 'rdm_diags' array")
 
         return new_df
+
+    @property
+    def is_space_set(self) -> bool:
+        return self.space is not None
+
+    @property
+    def are_peaks_set(self) -> bool:
+        return self.peaks is not None
 
     @property
     def E(self) -> np.ndarray:

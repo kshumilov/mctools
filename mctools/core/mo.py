@@ -69,6 +69,14 @@ def get_natural_orbitals(rdms: np.ndarray, /,
                          weights: Optional[Sequence[float]] = None) -> tuple[np.ndarray, np.ndarray]:
     """Obtains Natural Orbitals by diagonalizing 1RDM.
 
+    One-electron Reduced Density Matrix (1RDM) is defined as (in spinor basis):
+        D_pq = <I|q^h p|I>, where I - is the state, and p and q run over MOs.
+    The diagonalization of 1RDM in MO bases thus follows:
+        U @ s @ U^h = D_pq,
+    such that
+        - s_p is diagonal matrix of real occupancies: 0 <= s_p <= 1
+        - U_pq is special unitary matrix, defining Natural Orbitals of the state I.
+
     Args:
         rdms: Numpy array of the shape (#MO, #MO) or (#State, #MO, #MO).
         state_average: Whether to perform state average over the provided rdms - default is yes
@@ -79,7 +87,7 @@ def get_natural_orbitals(rdms: np.ndarray, /,
     Returns:
         pop: Numpy array of shape (#MO,) or (#State, #MO) with population of Natural MOs
         U: Numpy array of shape (#MO, #MO) or (#State, #MO, #MO), with new natural MOs in MO basis, s.t.
-           C_NO = U @ C_MO
+           C_NO = U^h @ C_MO
     """
     match rdms.ndim:
         case 2:
