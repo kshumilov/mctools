@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import abc
 
-from typing import NoReturn, Callable
+from typing import NoReturn, Callable, Sequence
 
 import pandas as pd
 import numpy as np
@@ -119,8 +119,22 @@ class Consolidator(abc.ABC):
         for col in self.DEFAULT_COLS:
             if col not in new_df:
                 raise ValueError(f"'df' must have {col}")
-
         return new_df
+
+    def add_properties(self: 'Consolidator', data: npt.ArrayLike, names: str | Sequence[str], replace=True) -> pd.DataFrame:
+        data = np.asarray(data)
+
+        if data.ndim == 0:
+            data = np.full(len(self), data)
+            names = [names]
+
+        if data.ndim > 2 and len(data) != len(self) and data.shape[-1] != len(names):
+            raise ValueError(f"'data' must of the same length as {self!r}: {len(self)}")
+
+        data = data.reshape(len(self), -1)
+        df = pd.DataFrame(data, columns=names)
+        self.update_properties(df, replace=replace)
+        return df
 
     def update_properties(self: 'Consolidator', new_df: pd.DataFrame, replace: bool = False) -> NoReturn:
         cols = set(new_df.columns)  # Columns on new_df that can be added
