@@ -80,7 +80,8 @@ class MCPeaks(Consolidator):
             self.calculate_peak_energy(save=True, replace=True)
 
         if not keep_dark:
-            self._df = self._df[self._df[self.OSC_COL] > 0.0].copy()
+            idx = self.filter(condition=lambda df: df[self.OSC_COL] > 0.0)
+            self._df = self._df.loc[idx].copy(deep=True)
             self.reset_index()
 
         if sort:

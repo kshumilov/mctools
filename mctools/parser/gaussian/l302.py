@@ -12,15 +12,20 @@ __all__ = [
     'l302_parser_funcs_general',
     'l302_parser_funcs_x2c',
     'l302_parser_funcs_all',
-
-    'extract_ao_overlap'
 ]
 
 ovlp_header = re.compile(r'\*\*\* Overlap \*\*\*')
 
 
-def read_ao_overlap_matrix(file: TextIO, first_line: str = '') -> tuple[ParsingResult, str]:
+def read_ao_overlap_matrix(file: TextIO, /,
+                           restriction: str = 'R', *,
+                           first_line: str = '') -> tuple[ParsingResult, str]:
     matrix, line = read_matrix_in_file(file, ovlp_header, first_line=first_line)
+    match restriction:
+        case 'G':
+             I2 = np.eye(2)
+             matrix = np.kron(matrix, I2)  # (#AOs, #AOs)
+
     return dict(overlap=matrix), line
 
 kinetic_header = re.compile(r'\*\*\* Kinetic Energy \*\*\*')

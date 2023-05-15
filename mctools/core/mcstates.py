@@ -530,10 +530,16 @@ class MCStates(Consolidator):
             warnings.warn('Slicing MCStates with peaks assigned is not tested')
 
             preserve_key = new_df.index.values
-            temp_df = self.peaks.calculate_state_idx()
-            included_initial = temp_df[self.peaks.INITIAL_COL].isin(preserve_key)
-            included_final = temp_df[self.peaks.FINAL_COL].isin(preserve_key)
-            new_peaks_df = self.peaks._df[included_initial & included_final].copy(deep=True)
+
+            def cond(df):
+                included_initial = df[self.peaks.INITIAL_COL].isin(preserve_key)
+                included_final = df[self.peaks.FINAL_COL].isin(preserve_key)
+                return included_initial & included_final
+
+            self.peaks.calculate_state_idx()
+            idx = self.peaks.filter(condition=cond)
+
+            new_peaks_df = self.peaks.df[idx].copy(deep=True)
             new_states.peaks = self.peaks.__class__(new_peaks_df, states=new_states)
 
         return new_states
@@ -650,11 +656,12 @@ class MCStates(Consolidator):
                 print(' ' * len(index) + ' |ψ> = ' + ci_str)
 
             print('-' * BAR_WIDTH)
-            print(
-                ' Addr'.center(5),
-                *[f'RAS{i + 1}'.center(w) for i, w in enumerate(self.space.graph.spaces)],
-                'Coefficient'.center(32)
-            )
+            print(' Addr'.center(5), end=' ')
+            if self.space.graph.is_cas:
+                print(f'CAS'.center(self.space.graph.spaces.r2), end=' ')
+            else:
+                print(*[f'RAS{i + 1}'.center(w) for i, w in enumerate(self.space.graph.spaces)], end=' ')
+            print('Coefficient'.center(32))
 
             # FIXME: use get_state_ci_vec method here
             sl = np.s_[self.ci_vecs.indptr[i]:self.ci_vecs.indptr[i + 1]]

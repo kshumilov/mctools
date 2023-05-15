@@ -1,6 +1,12 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import pandas as pd
 
-from .molecule import Molecule
+if TYPE_CHECKING:
+    from .molecule import Molecule
+    from ..parser.lib import ParsingResult
 
 
 __all__ = [
@@ -10,13 +16,11 @@ __all__ = [
 
 class Basis:
     __slots__ = [
-        'shells',
-        'primitives',
-
         'molecule'
     ]
 
-    shells: pd.DataFrame
-    primitives: pd.DataFrame
-
     molecule: Molecule
+
+    @classmethod
+    def from_data(cls, data: ParsingResult):
+        pass

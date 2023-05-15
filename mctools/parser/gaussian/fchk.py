@@ -108,14 +108,8 @@ def read_fchk_header(file: TextIO, /) -> tuple[ParsingResult, str]:
 
 
 def read_main_info(file: TextIO, /, first_line: str = '') -> tuple[ParsingResult, str]:
-    short_title = file.readline()
-
-    line = file.readline()
-    method = method_patt.search(line)
-    if method is None:
-        raise PatternNotFound('Could not find FCHK method line', line=line)
-
-    charge, line = read_fchk_scalar(file, 'Charge')
+    header_info, line = read_fchk_header(file)
+    charge, line = read_fchk_scalar(file, 'Charge', first_line=line)
     multiplicity, line = read_fchk_scalar(file, 'Multiplicity', first_line=line)
 
     n_elec, line = read_fchk_scalar(file, 'Number of electrons', first_line=line)
