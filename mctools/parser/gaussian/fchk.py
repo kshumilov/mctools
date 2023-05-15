@@ -228,12 +228,3 @@ def parse_gdvfchk(filename: str, read_funcs: list[Callable], /, **kwargs) -> Par
         result, line = parse_file(file, read_funcs, result)
 
     return result
-
-
-if __name__ == '__main__':
-    import os
-
-    data_dir = os.path.join('..', '..', '..', 'data', '../../../example/fchk')
-    gdvfchk = os.path.join(data_dir, 'casscf.fchk')
-
-    result = parse_gdvfchk(gdvfchk, fchk_parser_funcs_general)

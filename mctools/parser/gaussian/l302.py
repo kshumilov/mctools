@@ -120,35 +120,3 @@ l302_parser_funcs_all = {
         read_orthogonal_aos_matrix,
     ]
 }
-
-
-def extract_ao_overlap(data: dict, is_unrestricted: bool = True, dtype=np.float_) -> np.ndarray:
-    if 'overlap' not in data:
-        raise ValueError('AO Overlap is not present in data')
-
-    S = data['overlap']
-    if is_unrestricted:
-        I2 = np.eye(2, dtype=dtype)
-        S = np.kron(S, I2)  # (#AOs, #AOs)
-
-    return S
-
-
-if __name__ == '__main__':
-    data_dir = os.path.join('data')
-    gdvlog = os.path.join(data_dir, 'casscf.log')
-
-    result: dict[ParsingResult] = {}
-    with open(gdvlog, 'r') as f:
-        overlap_result, line = read_ao_overlap_matrix(f)
-        result.update(overlap_result)
-
-        kinetic_result, line = read_ao_kinetic_energy_matrix(f, first_line=line)
-        result.update(kinetic_result)
-
-        hcore_result, line = read_ao_hcore_matrix(f, first_line=line)
-        result.update(hcore_result)
-
-    for label, matrix in result.items():
-        print(label)
-        print(matrix)

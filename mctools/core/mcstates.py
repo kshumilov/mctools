@@ -759,19 +759,3 @@ class MCStates(Consolidator):
         emin, emax = self.energy_range
         energy_str = f'E=[{emin:>11.6f}, {emax:>11.6f}]'
         return f'{self.__class__.__name__}({energy_str}, #states={len(self)})'
-
-
-if __name__ == '__main__':
-    import os, copy
-
-    from mctools.parser.gaussian.utils import parse_gdvlog
-    from mctools.parser.gaussian.l910 import l910_parser_funcs_general
-
-    data_dir = os.path.join('data')
-    space1_filename = os.path.join(data_dir, 'rasci_1.space.json')
-    gdvlog1 = os.path.join(data_dir, 'rasci_1.log')
-
-    space1 = MCSpace.from_json(space1_filename)
-    data1 = parse_gdvlog(gdvlog1, l910_parser_funcs_general, n_ground=14)
-    states1 = MCStates.from_dict(data1, space=space1)
-
