@@ -1,7 +1,9 @@
-import numpy as np
-import pandas as pd
-
+from collections import defaultdict
 from typing import TextIO, Callable, Type
+
+import numpy as np
+import numpy.typing as npt
+import pandas as pd
 
 from ..lib import (
     search_in_file,
@@ -20,12 +22,32 @@ __all__ = [
     'fchk_parser_funcs_general',
 
     'read_main_info',
-    'read_geom',
+    'read_molecular_geometry',
     'read_ao_basis',
     'read_mo_coefficients',
 
     'parse_gdvfchk',
+
+    'FCHK_ARRAY_PATT',
+    'FCHK_SCALAR_PATT',
 ]
+
+
+GAUSSIAN_SHELL_TYPES = {
+    0: 'S',
+    -1: 'SP', 1: 'P',
+    -2: 'D',  2: 'd',
+    -3: 'F',  3: 'f',
+    -4: 'G',  4: 'g',
+}
+
+GAUSSIAN_ML_AO = {
+    'S': [0],
+    'P': [1, -1, 0],
+    'D': [0, 1, -1, 2, -2],
+    'F': [0, 1, -1, 2, -2, 3, -3],
+    'G': [0, 1, -1, 2, -2, 3, -3, 4, -4]
+}
 
 
 def process_data_type(char: str, /) -> Type[np.float_ | np.int_ | np.str_]:
@@ -75,6 +97,16 @@ method_patt = ProcessedPattern(
 )
 
 
+def read_fchk_header(file: TextIO, /) -> tuple[ParsingResult, str]:
+    short_title = file.readline()
+
+    line = file.readline()
+    method = method_patt.search(line)
+    if method is None:
+        raise PatternNotFound('Could not find FCHK method line', line=line)
+    return {'short_title': short_title, **method}, line
+
+
 def read_main_info(file: TextIO, /, first_line: str = '') -> tuple[ParsingResult, str]:
     short_title = file.readline()
 
@@ -93,109 +125,93 @@ def read_main_info(file: TextIO, /, first_line: str = '') -> tuple[ParsingResult
     n_ao, line = read_fchk_scalar(file, 'Number of basis functions', first_line=line)
 
     return {
-        'short_title': short_title,
-        **method,
+        **header_info,
         'charge': charge, 'multiplicity': multiplicity,
         'n_elec': n_elec, 'n_elec_a': n_elec_a, 'n_elec_b': n_elec_b,
         'n_ao': n_ao  # TODO: select convention on AO representation: spherical or cartesian
     }, line
 
 
-def read_geom(file: TextIO, /, first_line: str = '') -> tuple[ParsingResult, str]:
-    Z, line = read_fchk_array(file, 'Atomic numbers', first_line=first_line)
+def read_molecular_geometry(file: TextIO, /, first_line: str = '') -> tuple[ParsingResult, str]:
+    atomic_number, line = read_fchk_array(file, 'Atomic numbers', first_line=first_line)
     coords, line = read_fchk_array(file, 'Current cartesian coordinates', first_line=line)
-    coords = coords.reshape((len(Z), 3))
-    return {'Z': Z, 'coords': coords}, line
+    coords = coords.reshape((len(atomic_number), 3))
+    return {'atomic_number': atomic_number, 'coords': coords}, line
 
 
-def read_ao_basis(file: TextIO, /, first_line: str = '') -> tuple[ParsingResult, str]:
-    # Shell information
-    shell_types, line = read_fchk_array(file, 'Shell types', first_line=first_line)
+def read_ao_basis(file: TextIO, /,
+                  atomic_number: npt.ArrayLike | None = None,
+                  restriction: str = 'R', *,
+                  first_line: str = '') -> tuple[ParsingResult, str]:
+    # Shell information (Part 1)
+    shell_code, line = read_fchk_array(file, 'Shell types', first_line=first_line)
     shell_size, line = read_fchk_array(file, 'Number of primitives per shell', first_line=line)
     shell2atom, line = read_fchk_array(file, 'Shell to atom map', first_line=line)
     shell2atom -= 1  # Start atom enumeration from 0
 
-    df_shells = pd.DataFrame({
-        'l': shell_types,  # FIXME: doesn't handle cartesian AOs
+    # Primitive information (Part 2)
+    primitive_exponents, line = read_fchk_array(file, 'Primitive exponents', first_line=line)
+    contraction_coeffs, line = read_fchk_array(file, 'Contraction coefficients', first_line=line)
+
+    shell_coords, line = read_fchk_array(file, 'Coordinates of each shell', first_line=line)
+    shell_coords = shell_coords.reshape((len(shell_code), 3))
+
+    shells = pd.DataFrame({
+        'code': shell_code,
         'n_prim': shell_size,
         'atom': shell2atom,
     })
+    shells['type'] = shells['code'].map(GAUSSIAN_SHELL_TYPES)
+    shells[['x', 'y', 'z']] = shell_coords
 
-    # Primitive information
-    # primitive_exponents, line = read_fchk_array(file, 'Primitive exponents', first_line=line)
-    # contraction_coeffs, line = read_fchk_array(file, 'Contraction coefficients', first_line=line)
-    # shell_coords, line = read_fchk_array(file, 'Coordinates of each shell', first_line=line)
-    # shell_coords = shell_coords.reshape((len(shell_types), 3))
-    #
-    # df_primitives = pd.DataFrame({
-    #     'exp': primitive_exponents,
-    #     'coeff': contraction_coeffs,
-    # })
-    # df_primitives[['x', 'y', 'z']] = shell_coords
+    # Atomic Orbitals information
+    aos = defaultdict(list)
+    for shell_idx, shell in shells.iterrows():
+        for shell_part in shell.type:
+            mls = GAUSSIAN_ML_AO[shell_part.capitalize()]
+            l = np.max(mls)
+            n_ao_per_shell = len(mls)
 
-    # # Magnetic QN
-    # # FIXME: px != p-1
-    # max_l = shell2l.max()
-    # mls = np.zeros(2 * max_l + 1, dtype=np.int64)
-    # mls[1::2] = np.arange(1, max_l + 1)
-    # mls[2::2] = mls[1::2]
-    #
-    # aos_per_shell = 2 * shell2l + 1
-    # n_spin = 1  # Kramer's Unrestricted formalism
-    #
-    # n_ao = np.sum(aos_per_shell)
-    # n_ao *= n_spin  # TODO: select convention on AO representation
-    # ao_idx = np.arange(n_ao)
-    #
-    # # AO Mappings
-    # ao2spin = ao_idx % n_spin
-    # ao2l = np.zeros((n_ao,), dtype=np.int64)
-    # ao2ml = np.zeros((n_ao,), dtype=np.int64)
-    # ao2atom = np.zeros((n_ao,), dtype=np.int64)
-    #
-    # offset = 0
-    # for shell_idx in range(len(shell_types)):
-    #     n = aos_per_shell[shell_idx]
-    #     end = offset + n_spin * n
-    #
-    #     atom = shell2atom[shell_idx]
-    #     l = shell2l[shell_idx]
-    #     ml = mls[:2 * l + 1]
-    #
-    #     # Iterate over spins and fill arrays
-    #     for i in range(n_spin):
-    #         sl = np.s_[offset + i:end + i:n_spin]
-    #         ao2atom[sl] = atom  # Alpha
-    #         ao2l[sl] = l
-    #         ao2ml[sl] = ml
-    #
-    #     offset = end
-    #
-    # df_ao = pd.DataFrame({
-    #     'atom': ao2atom,
-    #     'l': ao2l,
-    #     'ml': ao2ml,
-    #     's': ao2spin,
-    # }, index=ao_idx)
+            aos['shell'].extend([shell_idx] * n_ao_per_shell)
+            aos['atom'].extend([shell.atom] * n_ao_per_shell)
+            aos['l'].extend([l] * n_ao_per_shell)
+            aos['ml'].extend(mls)
 
-    return {'df_shells': df_shells}, line
+    aos = pd.DataFrame(aos)
+
+    if atomic_number is not None:
+        atomic_number = np.asarray(atomic_number)
+        shells['element'] = atomic_number[shells['atom']]
+        aos['element'] = atomic_number[aos['atom']]
+
+    if restriction == 'G':
+        aos = aos.loc[aos.index.repeat(2)].reset_index(drop=True)
+        aos['spin'] = aos.index % 2
+
+    return {
+        'df_shells': shells,
+        'df_ao': aos,
+        'exponents': primitive_exponents,
+        'coefficients': contraction_coeffs,
+    }, line
 
 
-def read_mo_coefficients(file: TextIO, n_ao: int, restriction: str, /, first_line: str = '') -> tuple[ParsingResult, str]:
+def read_mo_coefficients(file: TextIO, n_ao: int, /,
+                         restriction: str = 'R', *,
+                         first_line: str = '') -> tuple[ParsingResult, str]:
     raw_mo, line = read_fchk_array(file, 'Alpha MO coefficients', first_line=first_line)
 
     match restriction:
         case 'R':
-            C_MO = raw_mo.reshape(n_ao, n_ao)
-            # C_MO = np.kron(C_MO, np.eye(2, dtype=np.float_))
+            C_MO = raw_mo.reshape(-1, n_ao)
         case 'U':
             raw_mo_b, line = read_fchk_array(file, 'Beta MO coefficients', first_line=line)
             C_MO = np.zeros((n_ao, n_ao), dtype=np.float_)
-            C_MO[0::2, 0::2] = raw_mo.reshape(n_ao, n_ao)
-            C_MO[1::2, 1::2] = raw_mo_b.reshape(n_ao, n_ao)
+            C_MO[0::2, 0::2] = raw_mo.reshape(-1, n_ao)
+            C_MO[1::2, 1::2] = raw_mo_b.reshape(-1, n_ao)
         case 'G':
             C_MO = raw_mo[0::2] + raw_mo[1::2] * 1.j
-            C_MO = C_MO.reshape(n_ao * 2, n_ao * 2)  # (#MOs, #AOs)
+            C_MO = C_MO.reshape(-1, n_ao * 2)  # (#MOs, #AOs)
         case _:
             raise ValueError(f'Invalid MO restriction is specified: {restriction}')
 
@@ -204,7 +220,7 @@ def read_mo_coefficients(file: TextIO, n_ao: int, restriction: str, /, first_lin
 
 fchk_parser_funcs_general = [
     read_main_info,
-    read_geom,
+    read_molecular_geometry,
     read_ao_basis,
     read_mo_coefficients,
 ]
@@ -223,7 +239,7 @@ def parse_gdvfchk(filename: str, read_funcs: list[Callable], /, **kwargs) -> Par
 if __name__ == '__main__':
     import os
 
-    data_dir = os.path.join('..', '..', '..', 'data', 'fchk')
+    data_dir = os.path.join('..', '..', '..', 'data', '../../../example/fchk')
     gdvfchk = os.path.join(data_dir, 'casscf.fchk')
 
     result = parse_gdvfchk(gdvfchk, fchk_parser_funcs_general)
