@@ -45,8 +45,8 @@ class Molecule:
     _df: pd.DataFrame  # Table that hold properties of atoms in the molecule
     name: str | None
 
-    def __init__(self, molecule: pd.DataFrame, *, 
-                 charge: int = 0, multiplicity: int = 1, /,
+    def __init__(self, molecule: pd.DataFrame, /,
+                 charge: int = 0, multiplicity: int = 1, *,
                  name: str | None = None, source: str | None = None):
         for col in self.DEFAULT_COLS:
             if col not in molecule:

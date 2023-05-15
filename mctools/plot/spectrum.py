@@ -10,7 +10,7 @@ __all__ = [
     'lorentizian',
     'get_peaks_broadening',
 
-    'BroadeningFunc'
+    'BroadeningFunc',
 ]
 
 

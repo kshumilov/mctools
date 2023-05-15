@@ -19,7 +19,7 @@ __all__ = [
 class SimpleGraph:
     """Basic CI string manipulations such as addressing, excitation lists, etc.
 
-    In this implementations, the edge unoccupied edges of the graph are taken to be zero.
+    In this implementation, the unoccupied edges of the graph are taken to be zero.
     This means that only occupied orbitals play roles in formation of the CI configuration address.
 
     Attributes:
