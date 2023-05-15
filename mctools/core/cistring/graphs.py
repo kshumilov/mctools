@@ -120,13 +120,15 @@ class SimpleGraph:
         """
         nodes = np.zeros((self.n_elec + 1, self.n_orb + 1), dtype=self.dtype)
 
-        idx = self.get_node_idx()
         if self.reverse:
-            for e, o in zip(*idx):
-                nodes[e, o] = comb(o, e, exact=True)
+            f = lambda e, o: comb(o, e, exact=True)
         else:
-            for e, o in zip(*idx):
-                nodes[e, o] = comb(self.n_orb - o, self.n_elec - e, exact=True)
+            f = lambda e, o: comb(self.n_orb - o, self.n_elec - e, exact=True)
+
+        f = np.vectorize(f, otypes=[self.dtype])
+
+        idx = self.get_node_idx()
+        nodes[idx] = f(*idx)
 
         return nodes
 
@@ -173,13 +175,14 @@ class SimpleGraph:
         bit = np.zeros_like(addr, dtype=self.config_dtype)
 
         while (idx := e < self.n_elec).any():
-            # bit = ((config[idx] >> o) & ONE).astype(self.dtype)
+            # bit = ((config[idx] >> o) & ONE
             np.right_shift(config, o, out=bit, where=idx, dtype=self.config_dtype, casting='unsafe')
             np.bitwise_and(bit, 1, out=bit, where=idx, dtype=self.config_dtype)
 
             # e[idx] += bit
             np.add(e, bit, out=e, where=idx, dtype=e.dtype, casting='unsafe')
 
+            # update address with edges
             addr[idx] += (self.edges[e[idx] - 1, o] * bit[idx]).astype(addr.dtype)
 
             o += 1
