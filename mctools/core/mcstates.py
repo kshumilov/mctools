@@ -266,7 +266,8 @@ class MCStates(Consolidator):
             raise ValueError('Set MCSpace first')
 
         idx = self.filter(idx=idx, condition=condition)
-        norm = sparse.linalg.norm(self.ci_vecs, axis=1)
+        norm = sparse.linalg.norm(self.ci_vecs[self._state_map[idx]], axis=1)
+
         df = pd.DataFrame({col_name: norm}, index=self._df.index[idx])
 
         if not save:

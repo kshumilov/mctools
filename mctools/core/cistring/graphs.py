@@ -1,7 +1,7 @@
 import warnings
 from collections import defaultdict
 from itertools import product
-from typing import NamedTuple, NoReturn, Literal
+from typing import NamedTuple, NoReturn, Literal, Any
 
 import numpy as np
 import numpy.typing as npt
