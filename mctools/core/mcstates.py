@@ -20,11 +20,7 @@ from .constants import Eh2eV
 
 __all__ = [
     'MCStates',
-    'Selector',
 ]
-
-
-Selector = Callable[[pd.DataFrame], bool]
 
 
 class MCStates(Consolidator):
@@ -39,12 +35,8 @@ class MCStates(Consolidator):
         rdm_diags: Diagonals of 1RDM matrices for every state. rdm_diag.shape = (#States, #Active MOs)
 
     Possible columns on df:
-        SOURCE_COL: file from which the state originates;
         STATE_COL: index of the state as defined in the `source`;
         ENERGY_COL: Energy of the state in Hartree;
-
-        IDX_COLS: list of columns used to uniquely identify states;
-        DEFAULT_COLS: list of permanent columns on `df` for MCStates object to be valid;
 
     Future Development:
         TODO: add name attribute
@@ -64,8 +56,8 @@ class MCStates(Consolidator):
     SOURCE_COL = 'state_source'
     RESOURCE_COL = 'resource_idx'  # index of related resource in ci_vecs and rdm_diag, see _state_map
 
-    DEFAULT_COLS = [STATE_COL, SOURCE_COL, E_COL]  # Permanent property columns for the df
     IDX_COLS = [STATE_COL, SOURCE_COL]  # Columns used to identify the states uniquely
+    DEFAULT_COLS = [*IDX_COLS, ENERGY_COL]  # Permanent property columns for the df
 
     __slots__ = [
         'ci_vecs',
@@ -93,24 +85,10 @@ class MCStates(Consolidator):
                  source: str = '',
                  space: MCSpace | None = None, *,
                  sort: bool = False) -> None:
-        if self.SOURCE_COL not in df:
-            if source:
-                df[self.SOURCE_COL] = source
-            else:
-                raise ValueError(f"either 'df' must have {self.SOURCE_COL} or "
-                                 f"source argument must be passed to {self.__class__.__name__}")
-
-        if not (ci_vecs.ndim == rdm_diags.ndim == df.ndim == 2):
-            raise ValueError("'ci_vec', 'rdm_diag', and 'df' must be 2D")
-
-        if not (len(df.index) == ci_vecs.shape[0] == rdm_diags.shape[0]):
-            raise ValueError("Number of states should match across 'df' DataFrame, "
-                             "'ci_vecs' array, and 'rdm_diags' array")
-
         self.ci_vecs = ci_vecs.tocsr()
         self.rdm_diags = rdm_diags
-        self.df = df
-        self.reset_index()
+
+        super(MCStates, self).__init__(df, source=source, sort=False)
 
         if space is not None:
             if space.n_act_mo != rdm_diags.shape[1]:
@@ -732,7 +710,11 @@ class MCStates(Consolidator):
         new_df = super(MCStates, self).validate_df(new_df)
 
         if not (self.ci_vecs.ndim == self.rdm_diags.ndim == new_df.ndim == 2):
-            raise ValueError('df must be 2D')
+            raise ValueError("'ci_vec', 'rdm_diag', and 'df' must be 2D")
+
+        if not (len(new_df.index) == self.ci_vecs.shape[0] == self.rdm_diags.shape[0]):
+            raise ValueError("Number of states should match across 'df' DataFrame, "
+                             "'ci_vecs' array, and 'rdm_diags' array")
 
         return new_df
 

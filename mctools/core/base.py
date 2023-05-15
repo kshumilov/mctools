@@ -53,6 +53,20 @@ class Consolidator(abc.ABC):
 
     _df: pd.DataFrame
 
+    def __init__(self: 'Consolidator', df: pd.DataFrame, *args, source: str = '', sort: bool = False, **kwargs) -> None:
+        if self.SOURCE_COL not in df:
+            if source:
+                df[self.SOURCE_COL] = source
+            else:
+                raise ValueError(f"either 'df' must have {self.SOURCE_COL} or "
+                                 f"source argument must be passed to {self.__class__.__name__}")
+
+        self.df = df
+        self.reset_index()
+
+        if sort:
+            self.sort()
+
     @abc.abstractmethod
     def analyze(self: 'Consolidator', idx: npt.ArrayLike | None = None, condition: Selector | None = None,
                 save=True, replace=False) -> pd.DataFrame | None:

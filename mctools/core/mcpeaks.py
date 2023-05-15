@@ -1,20 +1,17 @@
 import warnings
 
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from .base import Consolidator
 from .mcspace import MCSpace
+from .base import Consolidator, Selector
 from .mcstates import MCStates
 from .constants import Eh2eV
 
 # from .utils import get_state_alignment, get_state_map_from_alignment, StateAlignment
-
-if TYPE_CHECKING:
-    from .base import Selector
 
 __all__ = [
     'MCPeaks',
@@ -73,16 +70,8 @@ class MCPeaks(Consolidator):
                  source: str = '',
                  states: Optional[MCStates] = None, *,
                  sort: bool = False, keep_dark: bool = False) -> None:
-        if self.SOURCE_COL not in df:
-            if source:
-                df[self.SOURCE_COL] = source
-            else:
-                raise ValueError(f"either 'df' must have {self.SOURCE_COL} columns or "
-                                 f"source argument must be passed to {self.__class__.__name__}")
-
         # TODO: implement validation of peaks against states.df
-        self.df = df
-        self.reset_index()
+        super(MCPeaks, self).__init__(df, source=source, sort=False)
 
         self.states = states
         if not self.are_states_set:
@@ -366,18 +355,3 @@ class MCPeaks(Consolidator):
 
     def __len__(self) -> int:
         return len(self._df)
-
-
-if __name__ == '__main__':
-    import os
-    from mctools.core.mcspace import MCSpace
-    from mctools.parser.gaussian.utils import parse_gdvlog
-    from mctools.parser.gaussian.l910 import l910_parser_funcs_general
-
-    data_dir = os.path.join('..', '..', 'data')
-    gdvlog = os.path.join(data_dir, 'rasci_1.log')
-
-    space = MCSpace.from_json(os.path.join(data_dir, 'rasci_1.space.json'))
-    data = parse_gdvlog(gdvlog, l910_parser_funcs_general, n_ground=14)
-    spectrum = MCPeaks.from_dict(data, space=space)
-    spectrum.analyze()

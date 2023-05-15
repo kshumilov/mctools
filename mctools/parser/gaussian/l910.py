@@ -227,7 +227,7 @@ tdm_start_patt = ProcessedPattern(
 )
 
 
-def read_oscillator_strength(file: TextIO, n_states: int, /, n_ground: int, *,
+def read_oscillator_strength(file: TextIO, n_states: int, n_ground: int, /, *,
                              first_line: str = '') -> tuple[ParsingResult, str]:
     _, line = search_in_file(file, tdm_start_patt.pattern, first_line=first_line, err_msg='No Oscillator information is found')
 
