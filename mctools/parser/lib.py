@@ -161,27 +161,29 @@ def parse_calc_name(filename: str, patterns: list[re.Pattern], /,
     return info
 
 
-def parse_file(file: TextIO, read_funcs: list[Callable], result: ParsingResult, /, first_line: str = ''):
+def parse_file(file: TextIO, read_funcs: list[Callable], /, result: ParsingResult, *, first_line: str = ''):
     line = first_line
 
     for func in read_funcs:
-        args = []
+        args: list[Any] = []
+        kwargs: dict[str, Any] = {}
         for param, info in inspect.signature(func).parameters.items():
-            if param in {'file', 'first_line'}:
+            if param in {'file', 'first_line'} or info.kind == info.KEYWORD_ONLY:
                 continue
-            elif info.kind == info.POSITIONAL_OR_KEYWORD or info.kind == info.KEYWORD_ONLY:
-                continue
-
-            # TODO: generalize to read kwargs too
-            if param in result:
-                args.append(result[param])
             else:
-                print(f'Skipping: {func.__name__}, parameter {param} is unavailable')
-                break
+                value = result.get(param)
+                if info.kind == info.POSITIONAL_ONLY:
+                    if value is not None:
+                        args.append(value)
+                    else:
+                        print(f'Skipping: {func.__name__}: positional parameter {param} is unavailable')
+                        break
+                elif value is not None and info.kind == info.POSITIONAL_OR_KEYWORD:
+                    kwargs[param] = value
         else:
             try:
                 print(f'Executing: {func.__name__}', end='')
-                data, line = func(file, *args, first_line=line)
+                data, line = func(file, *args, **kwargs, first_line=line)
                 result.update(data)
                 print(' --- Done')
             except PatternNotFound as err:
