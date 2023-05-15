@@ -4,7 +4,7 @@ from typing import Optional, Iterator
 import numpy as np
 from scipy import sparse
 
-from ..lib import find_line_in_file, grouped_tmplt, simple_int_tmplt
+from ..lib import ProcessedPattern, search_in_file, int_patt
 
 
 __all__ = [
@@ -13,9 +13,11 @@ __all__ = [
 ]
 
 
-rwfdump_header_patt = re.compile(r'Dump of file\s*%s\s*length\s*%s\s*\(read left to right\):' % (
-    grouped_tmplt % (r'code', simple_int_tmplt), grouped_tmplt % (r'size', simple_int_tmplt)
-))
+rwfdump_header_patt = ProcessedPattern(
+    r'Dump of file\s*%s\s*length\s*%s\s*\(read left to right\):' % (
+        (int_patt % 'code', int_patt % 'size')
+), 'rwf_info', default_group_map=int)
+
 ROW_SIZE = 5  # Number of elements in a single row prin
 
 
@@ -34,12 +36,10 @@ def read_rwfdump(filename: str, n: Optional[int] = None, chunk_size: int = 5,
         Generator that yields numpy arrays of type dtype.
     """
     with open(filename, 'r') as file:
-        match, line = find_line_in_file(file, rwfdump_header_patt, default_group_map=int)
-        if match is None:
-            print(line)
-            raise ValueError(f"Could not find the header in {filename}")
+        match, line = search_in_file(file, rwfdump_header_patt,
+                                     err_msg=f"Could not find the header Gaussian dump RwfDump")
 
-        code, size = match.pop('code'), match.pop('size')
+        code, size = match.code, match.size
 
         n = n if n else size
         if n > size:

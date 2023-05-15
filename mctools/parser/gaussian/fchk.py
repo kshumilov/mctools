@@ -1,15 +1,13 @@
-import re
-
 import numpy as np
 import pandas as pd
 
-from typing import TextIO, Callable
+from typing import TextIO, Callable, Type
 
 from ..lib import (
-    find_pattern_in_file,
-    find_pattern_in_line,
+    search_in_file,
 
     PatternNotFound,
+    ProcessedPattern,
 
     simple_int_tmplt,
     simple_float_tmplt,
@@ -30,63 +28,61 @@ __all__ = [
 ]
 
 
-def read_fchk_scalar(file: TextIO, header: str, /, first_line: str = '') -> tuple[int|float|str, str]:
-    patt = re.compile(r'%s\s*(?P<data_type>I|R)\s*(?P<value>%s|%s)' %
-                      (header, simple_int_tmplt, simple_float_tmplt))
-    match, line = find_pattern_in_file(file, patt, first_line=first_line, group_maps={'N': int})
-    if match is None:
-        raise PatternNotFound(f"Couldn't find FCHK scalar: {header}", line=line)
-
-    match match.pop('data_type'):
+def process_data_type(char: str, /) -> Type[np.float_ | np.int_ | np.str_]:
+    match char:
         case 'R':
-            data_type = float
+            return np.float_
         case 'I':
-            data_type = int
+            return np.int_
         case 'C':
-            data_type = str
+            return np.str_
         case _:
             raise ValueError('Invalid data_type')
 
-    value = data_type(match.pop('value'))
-    return value, line
+
+FCHK_SCALAR_PATT = ProcessedPattern(
+    r'%s\s*(?P<dt>I|R)\s*' + (r'(?P<v>%s|%s)' % (simple_int_tmplt, simple_float_tmplt)),
+    constructor=lambda dt, v: dt(v), group_maps={'dt': process_data_type}
+)
+
+FCHK_ARRAY_PATT = ProcessedPattern(
+    r'%s\s*(?P<data_type>I|R)\s*N=\s*(?P<N>\d+)',
+    'fchk_array_info',
+    group_maps={'N': int, 'data_type': process_data_type}
+)
 
 
-def read_fchk_array(file: TextIO, header: str, /, first_line='') -> tuple[np.ndarray, str]:
-    patt = re.compile(r'%s\s*(?P<data_type>I|R)\s*N=\s*(?P<N>\d+)' % header)
-    match, line = find_pattern_in_file(file, patt, first_line=first_line, group_maps={'N': int})
-    if match is None:
-        raise ValueError(f"Couldn't find header: {header}")
+def read_fchk_scalar(file: TextIO, header: str, /, *, first_line: str = '') -> tuple[int|float|str, str]:
+    patt = FCHK_SCALAR_PATT.update_pattern(header)
+    return search_in_file(file, patt, first_line=first_line, err_msg=f'Could not find FCHK scalar: {header}')
+
+
+def read_fchk_array(file: TextIO, header: str, /, *, first_line: str ='') -> tuple[np.ndarray, str]:
+    patt = FCHK_ARRAY_PATT.update_pattern(header)
+    fchk_arr_info, line = search_in_file(file, patt, first_line=first_line, err_msg=f'Could not find FCHK array: {header}')
 
     arr = []
-    N = match.pop('N')
-    while len(arr) < N:
+    while len(arr) < fchk_arr_info.N:
         line = file.readline()
         arr.extend(line.split())
 
-    match match.pop('data_type'):
-        case 'R':
-            data_type = np.float64
-        case 'I':
-            data_type = np.int64
-        case _:
-            raise ValueError('Invalid data_type')
-
-    arr = []
-    N = match.pop('N')
-    while len(arr) < N:
-        line = file.readline()
-        arr.extend(line.split())
-
-    arr = np.asarray(arr, dtype=data_type)
+    arr = np.asarray(arr, dtype=fchk_arr_info.data_type)
     return arr, line
 
 
-method_patt = re.compile(r'(?P<calc>[a-zA-Z]+)\s*(?P<method>(?P<restriction>R|RO|U|G)\w+)\s*(?P<basis>\w+)')
+method_patt = ProcessedPattern(
+    r'(?P<calc>[a-zA-Z]+)\s*(?P<method>(?P<restriction>R|RO|U|G)\w+)\s*(?P<basis>\w+)'
+)
 
 
 def read_main_info(file: TextIO, /, first_line: str = '') -> tuple[ParsingResult, str]:
     short_title = file.readline()
-    method, *_ = find_pattern_in_line(file.readline(), method_patt)
+
+    line = file.readline()
+    method = method_patt.search(line)
+    if method is None:
+        raise PatternNotFound('Could not find FCHK method line', line=line)
+
     charge, line = read_fchk_scalar(file, 'Charge')
     multiplicity, line = read_fchk_scalar(file, 'Multiplicity', first_line=line)
 

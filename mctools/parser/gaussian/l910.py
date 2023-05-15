@@ -1,29 +1,37 @@
-import math
-import re
+from __future__ import annotations
+
+import re, math
 
 from functools import reduce
-from typing import TextIO, Callable
+from typing import TextIO, Callable, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from mctools.core import MCStates, MCPeaks
+from ...core.cistring import RASMOs
+from ...core import MCStates, MCPeaks
 
 from ..lib import (
-    find_line_in_file,
-    find_pattern_in_file,
-    PatternNotFound,
+    search_in_file,
+    findall_in_file,
+    ProcessedPattern,
 
-    ParsingResult,
+    int_patt, simple_int_tmplt,
+    float_patt,
+    bool_patt,
 
-    grouped_tmplt,
-    simple_float_tmplt,
-    simple_int_tmplt,
-    simple_bool_tmplt,
+    bool_map,
 )
 
-from .utils import float_patt, bool_map, process_complex_match, process_float_match, read_matrix_in_file
+from .utils import (
+    process_complex_match,
+    read_matrix_in_file
+)
+
+if TYPE_CHECKING:
+    from ..lib import ParsingResult
+
 
 __all__ = [
     'l910_parser_funcs_general',
@@ -31,145 +39,111 @@ __all__ = [
 
     'read_rdms',
     'read_mc_spec',
-    'read_ci',
+    'read_ci_vecs',
     'read_rdm_diags',
     'read_oscillator_strength',
 ]
 
 mc_spec_start_patt = re.compile(r'Input Summary:')
 
-orb_type_patt = re.compile(r'\s*'.join([
-    r'RHF=\s*%s\s*,' % (grouped_tmplt % (r'is_rhf', simple_bool_tmplt)),
-    r'CRHF=\s*%s\s*,' % (grouped_tmplt % (r'is_crhf', simple_bool_tmplt)),
-    r'ROHF=\s*%s\s*,' % (grouped_tmplt % (r'is_rohf', simple_bool_tmplt)),
-    r'GHF=\s*%s\s*' % (grouped_tmplt % (r'is_ghf', simple_bool_tmplt)),
-]))
+ref_type_patt = ProcessedPattern(r'\s*,\s*'.join([
+    r'RHF=\s*%s' % (bool_patt % 'is_rhf'),
+    r'CRHF=\s*%s' % (bool_patt % 'is_crhf'),
+    r'ROHF=\s*%s' % (bool_patt % 'is_rohf'),
+    r'GHF=\s*%s' % (bool_patt % 'is_ghf')
+]), 'ref_type', default_group_map=bool_map)
 
-ci_type_patt = re.compile(r''.join([
-    r'CAS=\s*%s\s*,\s*' % (grouped_tmplt % (r'is_cas', simple_bool_tmplt)),
-    r'RAS=\s*%s\s*,\s*' % (grouped_tmplt % (r'is_ras', simple_bool_tmplt)),
-    r'MRCISD=\s*%s\s*' % (grouped_tmplt % (r'is_mrcisd', simple_bool_tmplt)),
-]))
+ci_type_patt = ProcessedPattern(r'\s*'.join([
+    r'CAS=\s*%s\s*,' % (bool_patt % r'is_cas'),
+    r'RAS=\s*%s\s*,' % (bool_patt % r'is_ras'),
+    r'MRCISD=\s*%s\s*' % (bool_patt % r'is_mrcisd'),
+]), 'ci_type', default_group_map=bool_map)
 
-ras_patt = re.compile(r'RAS\(\s*%s,\s*%s,\s*%s\)' % (
-    grouped_tmplt % (r'n_ras1', simple_int_tmplt),
-    grouped_tmplt % (r'n_ras2', simple_int_tmplt),
-    grouped_tmplt % (r'n_ras3', simple_int_tmplt),
-))
+ras_patt = ProcessedPattern(r'RAS\(\s*%s,\s*%s,\s*%s\)' % (
+    (int_patt % r'r1'), (int_patt % r'r2'), (int_patt % r'r3'),
+), RASMOs, default_group_map=int)
 
-cas_patt = re.compile(r'CAS\(\s*%se\s*,\s*%so\s*\)' % (
-    grouped_tmplt % (r'n_e', simple_int_tmplt),
-    grouped_tmplt % (r'n_o', simple_int_tmplt),
-))
+cas_patt = ProcessedPattern(r'CAS\(\s*%se\s*,\s*%so\s*\)' % (
+    (int_patt % r'n_e'), (int_patt % r'n_o'),
+), lambda n_e, n_o: RASMOs(0, n_o, 0), default_group_map=int)
 
-orb_info_patt = re.compile(r''.join([
-    r'NTOrb=\s*%s\s*' % grouped_tmplt % (r'n_orb', simple_int_tmplt),
-    r'NIOrb=\s*%s\s*' % grouped_tmplt % (r'n_inact', simple_int_tmplt),
-    r'NAOrb=\s*%s\s*' % grouped_tmplt % (r'n_act', simple_int_tmplt),
-    r'NVOrb=\s*%s\s*' % grouped_tmplt % (r'n_virt', simple_int_tmplt),
-]))
+ci_spaces_patt = ProcessedPattern(r'\s*'.join([
+    r'NTOrb=\s*%s' % (int_patt % r'n_orb'),
+    r'NIOrb=\s*%s' % (int_patt % r'inactive'),
+    r'NAOrb=\s*%s' % (int_patt % r'active'),
+    r'NVOrb=\s*%s' % (int_patt % r'virtual'),
+]) + r'\s*', 'ci_spaces', default_group_map=int)
 
 sa_start_patt = re.compile(r'SA Weights Read:')
-sa_weight_patt = re.compile(r''.join([
-    'State:\s*%s\s*' % grouped_tmplt % ('state_idx', simple_int_tmplt),
-    'Weight:\s*%s\s*' % (float_patt % 'weight'),
-]))
+sa_weight_patt = ProcessedPattern(r'\s*'.join([
+    r'State:\s*%s' % simple_int_tmplt,
+    r'Weight:\s*%s' % (float_patt % r'w'),
+]) + r'\s*', constructor=lambda w: w, group_maps={'w': float})
 
-tot_elec_info_patt = re.compile(r''.join([
-    r'Electrons, Alpha=\s*%s\s*Beta=\s*%s' % (
-        grouped_tmplt % (r'n_elec_a', simple_int_tmplt),
-        grouped_tmplt % (r'n_elec_b', simple_int_tmplt),
-    )
-]))
+tot_elec_info_patt = ProcessedPattern(r'Electrons, ' + r'\s*'.join([
+    r'Alpha=\s*%s' % (int_patt % r'a'),
+    r'Beta=\s*%s' % (int_patt % r'b'),
+]) + r'\s*', 'elec', default_group_map=int)
 
-act_elec_info_patt = re.compile(r''.join([
-    r'Active Electrons, Alpha=\s*%s\s*Beta=\s*%s' % (
-        grouped_tmplt % (r'n_elec_a', simple_int_tmplt),
-        grouped_tmplt % (r'n_elec_b', simple_int_tmplt),
-    )
-]))
+act_elec_info_patt = ProcessedPattern(r'Active Electrons, ' + r'\s*'.join([
+    r'Alpha=\s*%s' % (int_patt % r'a'),
+    r'Beta=\s*%s' % (int_patt % r'b'),
+]) + r'\s*', 'elec_act', default_group_map=int)
 
-n_confgis_patt = re.compile(r'Alpha Strings=\s*%s\s*Beta Strings=\s*%s\s*' % (
-    grouped_tmplt % (r'n_config_a', simple_int_tmplt),
-    grouped_tmplt % (r'n_config_b', simple_int_tmplt),
-))
+n_configs_patt = ProcessedPattern(r'\s*'.join([
+    r'Alpha Strings=\s*%s' % (int_patt % r'a'),
+    r'Beta Strings=\s*%s' % (int_patt % r'b'),
+]) + r'\s*', 'config', default_group_map=int)
 
 
-def read_mc_spec(file: TextIO, /, first_line: str = '') -> tuple[ParsingResult, str]:
-    match, line = find_line_in_file(file, mc_spec_start_patt, first_line=first_line)
-    if match is None:
-        raise PatternNotFound('No MCSCF Specification is found', line=line)
-
+def read_mc_spec(file: TextIO, /, *, first_line: str = '') -> tuple[ParsingResult, str]:
+    _, line = search_in_file(file, mc_spec_start_patt, first_line=first_line,
+                             err_msg='No MCSCF Specification is found')
     mc_spec = {}
 
-    orb_type_info, line = find_pattern_in_file(file, orb_type_patt, first_line=line, default_group_map=bool_map)
-    ci_type_info, line = find_pattern_in_file(file, ci_type_patt, first_line=line, default_group_map=bool_map)
+    ref_type_info, line = search_in_file(file, ref_type_patt, first_line=line,
+                                         err_msg='Could not find WF reference type')
+    ci_type_info, line = search_in_file(file, ci_type_patt, first_line=line,
+                                        err_msg='Could not find CI type')
 
-    if ci_type_info['is_cas']:
-        mc_patt = cas_patt
-    else:
-        mc_patt = ras_patt
+    mc_patt = cas_patt if ci_type_info.is_cas else ras_patt
+    ras_mo, line = search_in_file(file, mc_patt, first_line=line)
+    mc_spec.update({'ras': ras_mo, 'n_mo_act': sum(ras_mo)})
 
-    mc_info, line = find_pattern_in_file(file, mc_patt, first_line=line, default_group_map=int)
-    if ci_type_info['is_cas']:
-        ras_mo = (0, mc_info['n_o'], 0)
-    else:
-        ras_mo = (mc_info['n_ras1'], mc_info['n_ras2'], mc_info['n_ras3'])
+    mc_spec['mo_all'], line = search_in_file(file, ci_spaces_patt, first_line=line)
 
-    mc_spec.update({'ras': ras_mo, 'n_mos': sum(ras_mo)})
-
-    orb_info, line = find_line_in_file(file, orb_info_patt, first_line=line, default_group_map=int)
-    mo = (orb_info['n_inact'], orb_info['n_act'], orb_info['n_virt'])
-    mc_spec['mo_all'] = mo
-
-    match, line = find_line_in_file(file, sa_start_patt, first_line=line, n_skips=1)
+    match, line = search_in_file(file, sa_start_patt, first_line=line, n_skips=1)
     if match is not None:
-        sa_weights_info, line = find_pattern_in_file(file, sa_weight_patt,
-                                                     group_maps={'weight': float,},
-                                                     until_first_failure=True, max_matches=math.inf)
-        idx = []
-        sa_weights = []
-        while sa_weights_info:
-            match = sa_weights_info.pop()
-            idx.append(match.pop('state_idx'))
-            sa_weights.append(match.pop('weight'))
+        weights, line = findall_in_file(file, sa_weight_patt, max_matches=math.inf)
+        mc_spec['sa_weights'] = np.asarray(weights)
 
-        idx = np.argsort(idx)
-        sa_weights = np.asarray(sa_weights)[idx]
-
-        mc_spec['sa_weights'] = sa_weights
-
-    tot_elec_info, line = find_pattern_in_file(file, tot_elec_info_patt, first_line=line, default_group_map=int)
-    n_elec = (tot_elec_info['n_elec_a'], tot_elec_info['n_elec_b'])
-
-    act_elec_info, line = find_pattern_in_file(file, act_elec_info_patt, first_line=line, default_group_map=int)
-    n_elec_act = (act_elec_info['n_elec_a'], act_elec_info['n_elec_b'])
-
-    n_configs_info, line = find_pattern_in_file(file, n_confgis_patt, first_line=line, default_group_map=int)
-    n_config = (n_configs_info['n_config_a'], n_configs_info['n_config_b'])
+    tot_elec_info, line = search_in_file(file, tot_elec_info_patt, first_line=line)
+    act_elec_info, line = search_in_file(file, act_elec_info_patt, first_line=line)
+    n_configs_info, line = search_in_file(file, n_configs_patt, first_line=line)
 
     mc_spec.update({
-        'elec': n_elec_act, 'n_elec': sum(n_elec_act), 'elec_all': n_elec,
-        'config': n_config, 'n_configs': reduce(lambda x, y: x * y, n_config)
+        'elec_act': act_elec_info, 'elec': tot_elec_info,
+        'config': n_configs_info,
+        'n_configs': reduce(lambda x, y: x * y, n_configs_info)
     })
     return mc_spec, line
 
 
 mc_done_patt = re.compile(r'[CR]AS(SCF|CI) Done:')
-state_patt = re.compile(
-    r'State:\s*(?P<idx>\d*)\s*Energy \(Hartree\):\s*%s' % (grouped_tmplt % ('E', simple_float_tmplt))
+state_patt = ProcessedPattern(r'\s*'.join([
+    r'State:\s*%s' % (int_patt % r'state'),
+    r'Energy \(Hartree\):\s*%s' % (float_patt % r'E'),
+]), 'state_energy', group_maps={'state': int, 'E': float})
+
+ci_complex_patt = r'\s*'.join((float_patt % 'real', float_patt % 'imag'))
+ci_vec_patt = ProcessedPattern(
+    r'\(\s*(?P<addr>\d*)\)\s*%s' % ci_complex_patt,
+    'ci_coeff', match_funcs={'C': process_complex_match}, group_maps={'addr': int}
 )
-ci_complex_patt = r'\s*'.join((
-    grouped_tmplt % (r'real', simple_float_tmplt),
-    grouped_tmplt % (r'imag', simple_float_tmplt),
-))
-ci_vec_patt = re.compile(r'\(\s*(?P<addr>\d*)\)\s*%s' % ci_complex_patt)
 
 
-def read_ci(file: TextIO, n_configs: int, /, max_det: int = 50, first_line: str = '') -> tuple[ParsingResult, str]:
-    match, line = find_line_in_file(file, mc_done_patt, first_line=first_line)
-    if match is None or not line:
-        raise PatternNotFound('No state information is found', line=line)
+def read_ci_vecs(file: TextIO, n_configs: int, /, max_det: int = 50, *, first_line: str = '') -> tuple[ParsingResult, str]:
+    _, line = search_in_file(file, mc_done_patt, first_line=first_line, err_msg='No CI State information is found')
 
     # State energy info
     energy: list[float] = []
@@ -181,22 +155,19 @@ def read_ci(file: TextIO, n_configs: int, /, max_det: int = 50, first_line: str 
     col_idx: list[int] = []
 
     while True:
-        energy_info, line = find_pattern_in_file(file, state_patt, group_maps={'idx': int, 'E': float}, n_skips=2,
-                                                 max_matches=1, until_first_failure=bool(state_idx), first_line=line)
-        if not energy_info:
+        state_energy, line = search_in_file(file, state_patt,
+                                            n_skips=1 if state_idx else 2, first_line=line)
+        if not state_energy:
             break
 
-        energy.append(energy_info['E'])
-        state_idx.append(energy_info['idx'])
+        state_idx.append(state_energy.state)
+        energy.append(state_energy.E)
 
-        ci_vec_info, line = find_pattern_in_file(file, ci_vec_patt,
-                                                 group_maps={'addr': int}, match_funcs={'C': process_complex_match},
-                                                 max_matches=max_det, until_first_failure=True)
-
+        ci_vec_info, line = findall_in_file(file, ci_vec_patt, max_matches=max_det, max_skips=0)
         for state_info in ci_vec_info:
-            ci_data.append(state_info['C'])
-            row_idx.append(energy_info['idx'] - 1)
-            col_idx.append(state_info['addr'] - 1)
+            ci_data.append(state_info.C)
+            col_idx.append(state_info.addr - 1)
+            row_idx.append(state_energy.state - 1)
 
     n_states = max(state_idx)
     ci_vecs = sparse.coo_array((ci_data, (row_idx, col_idx)), shape=(n_states, n_configs))
@@ -209,14 +180,12 @@ rdm_start_patt = re.compile(r'\*\* Printing Density Matrices for all States \*\*
 rdm_diag_patt = re.compile(r'For Simplicity: The diagonals of 1PDM for State:\s*(?P<idx>\d*)')
 
 
-def read_rdm_diags(file: TextIO, n_states: int, n_mos: int, /, first_line: str = '') -> tuple[ParsingResult, str]:
-    match, line = find_line_in_file(file, rdm_start_patt, first_line=first_line)
-    if match is None:
-        raise PatternNotFound('No RDM information is found', line=line)
+def read_rdm_diags(file: TextIO, n_states: int, n_mo_act: int, /, *, first_line: str = '') -> tuple[ParsingResult, str]:
+    _, line = search_in_file(file, rdm_start_patt, first_line=first_line, err_msg='No RDM information is found')
 
-    rdm_diags: np.ndarray = np.empty((n_states, n_mos), dtype=np.float_)
+    rdm_diags: np.ndarray = np.empty((n_states, n_mo_act), dtype=np.float_)
     for i in range(n_states):
-        rdm_diag, line = read_matrix_in_file(file, rdm_diag_patt, shape=(n_mos,))
+        rdm_diag, line = read_matrix_in_file(file, rdm_diag_patt, shape=(n_mo_act,))
         rdm_diags[i] = rdm_diag
 
     return dict(rdm_diags=rdm_diags), line
@@ -226,15 +195,13 @@ rdm_real_patt = re.compile('1PDM Matrix \(real\) :')
 rdm_imag_patt = re.compile('1PDM Matrix \(imag\) :')
 
 
-def read_rdms(file: TextIO, n_states: int, n_mos: int, /, first_line: str = '') -> tuple[ParsingResult, str]:
-    match, line = find_line_in_file(file, rdm_start_patt, first_line=first_line)
-    if match is None:
-        raise ValueError('No PDM information is found')
+def read_rdms(file: TextIO, n_states: int, n_mo_act: int, /, first_line: str = '') -> tuple[ParsingResult, str]:
+    _, line = search_in_file(file, rdm_start_patt, first_line=first_line, err_msg='No RDM information is found')
 
-    rdms: np.ndarray = np.zeros((n_states, n_mos, n_mos), dtype=np.complex128)
+    rdms: np.ndarray = np.zeros((n_states, n_mo_act, n_mo_act), dtype=np.complex128)
     for i in range(n_states):
-        rdm_real, line = read_matrix_in_file(file, rdm_real_patt, shape=(n_mos, n_mos), first_line=line)
-        rdm_imag, line = read_matrix_in_file(file, rdm_imag_patt, shape=(n_mos, n_mos), first_line=line)
+        rdm_real, line = read_matrix_in_file(file, rdm_real_patt, shape=(n_mo_act, n_mo_act), first_line=line)
+        rdm_imag, line = read_matrix_in_file(file, rdm_imag_patt, shape=(n_mo_act, n_mo_act), first_line=line)
         rdms[i] = rdm_real + rdm_imag * 1.j
 
     return {
@@ -243,30 +210,38 @@ def read_rdms(file: TextIO, n_states: int, n_mos: int, /, first_line: str = '') 
     }, line
 
 
-osc_patt_start = re.compile(r'Using Dipole Ints in file:')
-osc_patt = re.compile(
-    r'Oscillator Strength For States\s*(?P<initial>\d*)\s*:\s*(?P<final>\d*)\s*f=\s*(?P<osc>[+\-]?\d*\.\d*)'
+osc_patt = ProcessedPattern(
+    r'Oscillator Strength For States\s*%s\s*:\s*%s\s*f=\s*%s' % (
+        int_patt % r'initial',
+        int_patt % r'final',
+        float_patt % 'osc'
+    ), 'osc_str', group_maps={'osc': float}, default_group_map=int
 )
 
 
-def read_oscillator_strength(file: TextIO, n_states: int, n_ground: int, /,
-                             first_line: str = '') -> tuple[ParsingResult, str]:
-    match, line = find_line_in_file(file, osc_patt_start, first_line=first_line)
-    if match is None:
-        raise PatternNotFound('No Oscillator information is found', line=line)
+tdm_start_patt = ProcessedPattern(
+    r'CI Transition Density Matrix\s*%s\s*:\s*%s\s*' % (
+        int_patt % r'i',
+        int_patt % r'f',
+    ), 'tdm_info', default_group_map=int
+)
 
-    osc_info, line = find_pattern_in_file(file, osc_patt,
-                                          first_line=line, max_matches=n_states * n_ground,
-                                          group_maps={'osc': float}, default_group_map=int)
+
+def read_oscillator_strength(file: TextIO, n_states: int, /, n_ground: int, *,
+                             first_line: str = '') -> tuple[ParsingResult, str]:
+    _, line = search_in_file(file, tdm_start_patt.pattern, first_line=first_line, err_msg='No Oscillator information is found')
+
+    n_pairs = n_ground * (2 * n_states - n_ground - 1) // 2
+    osc_info, line = findall_in_file(file, osc_patt, max_matches=n_pairs, max_skips=3, first_line=line)
 
     initial_state: list[int] = []
     final_state: list[int] = []
     osc_strength: list[float] = []
 
     for d in osc_info:
-        initial_state.append(d['initial'])
-        final_state.append(d['final'])
-        osc_strength.append(d['osc'])
+        initial_state.append(d.initial)
+        final_state.append(d.final)
+        osc_strength.append(d.osc)
 
     df = pd.DataFrame({
         MCPeaks.INITIAL_STATE_COL: initial_state,
@@ -274,6 +249,38 @@ def read_oscillator_strength(file: TextIO, n_states: int, n_ground: int, /,
         MCPeaks.OSC_COL: osc_strength
     })
     return dict(df_peaks=df), line
+
+
+tdm_real_patt = re.compile('1TDM Matrix:\s*1')
+tdm_imag_patt = re.compile('1TDM Matrix:\s*2')
+
+
+def read_tdms(file: TextIO, /, *, first_line: str = '') -> tuple[ParsingResult, str]:
+    tdms = {}
+    initial_state: list[int] = []
+    final_state: list[int] = []
+    osc_strength: list[float] = []
+
+    tdm_info, line = search_in_file(file, tdm_start_patt, first_line=first_line, err_msg='No TDM information is found')
+    while tdm_info:
+        tdm_real, line = read_matrix_in_file(file, tdm_real_patt, first_line=line)
+        tdm_imag, line = read_matrix_in_file(file, tdm_imag_patt, first_line=line)
+        tdms[(tdm_info.i, tdm_info.f)] = tdm_real + tdm_imag * 1.j
+
+        osc_info, line = search_in_file(file, osc_patt, n_skips=0, first_line=line)
+        initial_state.append(osc_info.initial)
+        final_state.append(osc_info.final)
+        osc_strength.append(osc_info.osc)
+
+        tdm_info, line = search_in_file(file, tdm_start_patt, first_line=line)
+
+    df = pd.DataFrame({
+        MCPeaks.INITIAL_STATE_COL: initial_state,
+        MCPeaks.FINAL_STATE_COL: final_state,
+        MCPeaks.OSC_COL: osc_strength,
+        'resource_idx': np.arange(len(tdms))
+    })
+    return dict(df_peaks=df, tdms=np.stack(list(result['tdms'].values()))), line
 
 
 spin_header_patt = re.compile(r'Computing Spin expectation values.')
@@ -295,7 +302,7 @@ spin_patt = re.compile(
 l910_parser_funcs_general: dict[str, list[Callable]] = {
     'l910': [
         read_mc_spec,
-        read_ci,
+        read_ci_vecs,
         read_rdm_diags,
         read_oscillator_strength
     ],
@@ -304,19 +311,8 @@ l910_parser_funcs_general: dict[str, list[Callable]] = {
 l910_parser_funcs_rdms: dict[str, list[Callable]] = {
     'l910': [
         read_mc_spec,
-        read_ci,
+        read_ci_vecs,
         read_rdms,
         read_oscillator_strength,
     ],
 }
-
-if __name__ == '__main__':
-    import os
-
-    data_dir = os.path.join('..', '..', '..', 'data')
-    gdvlog = os.path.join(data_dir, 'example.log')
-
-    with open(gdvlog, 'r') as file:
-        result, line = read_mc_spec(file, gdvlog)
-
-        print(result)
