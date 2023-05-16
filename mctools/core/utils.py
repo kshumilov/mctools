@@ -29,7 +29,7 @@ def get_state_alignment(left: MCStates, right: MCStates,
 
     Assumes that states are sorted and contain no duplicates
     """
-    if not ignore_space and left.space != right.space:
+    if not ignore_space and left.mcspace != right.mcspace:
         raise ValueError('Spaces are different CI vector overlap is poorly defined')
 
     if not len(left) and not len(right):

@@ -66,7 +66,7 @@ class MCStates(Consolidator):
         'ci_vecs',
         'rdm_diags',
 
-        'space',
+        'mcspace',
         'peaks',
         '_state_map'
     ]
@@ -74,7 +74,7 @@ class MCStates(Consolidator):
     ci_vecs: sparse.csr_array | sparse.lil_array  # Sparse array of CI vectors
     rdm_diags: np.ndarray
 
-    space: MCSpace | None
+    mcspace: MCSpace | None
     peaks: MCPeaks | None
 
     # Used for implicit sorting of rdm_diag and ci_vec
@@ -86,22 +86,22 @@ class MCStates(Consolidator):
                  ci_vecs: sparse.csr_array | sparse.lil_array | sparse.coo_array,
                  rdm_diags: np.ndarray, /,
                  source: str = '',
-                 space: MCSpace | None = None, *,
+                 mcspace: MCSpace | None = None, *,
                  sort: bool = False) -> None:
         self.ci_vecs = ci_vecs.tocsr()
         self.rdm_diags = rdm_diags
 
         super(MCStates, self).__init__(df, source=source, sort=False)
 
-        if space is not None:
-            if space.n_act_mo != rdm_diags.shape[1]:
+        if mcspace is not None:
+            if mcspace.n_act_mo != rdm_diags.shape[1]:
                 raise ValueError("Number of active MOs in MCSpace must be equal to number of MOs in 'rdm_diags' array")
 
-            if space.n_configs != ci_vecs.shape[1]:
+            if mcspace.n_configs != ci_vecs.shape[1]:
                 raise ValueError("Number of configurations in MCSpace must be equal to number of determinants in "
                                  "'ci_vecs' array")
 
-        self.space = space
+        self.mcspace = mcspace
         self._state_map = np.arange(len(self))
         self.peaks = None
         # self.df['resource_idx'] = self._state_map
@@ -199,7 +199,7 @@ class MCStates(Consolidator):
 
         idx = self.filter(idx=idx, condition=condition)
 
-        df = self.space.partition_rdm_diag(self.rdm_diags[self._state_map[idx]])
+        df = self.mcspace.partition_rdm_diag(self.rdm_diags[self._state_map[idx]])
         df.set_index(self._df.index[idx], inplace=True)
 
         if not save:
@@ -234,7 +234,7 @@ class MCStates(Consolidator):
 
         idx = self.filter(idx=idx, condition=condition)
 
-        df = self.space.partition_ci_vec(self.ci_vecs[self._state_map[idx]])
+        df = self.mcspace.partition_ci_vec(self.ci_vecs[self._state_map[idx]])
         df.set_index(self._df.index[idx], inplace=True)
 
         if not save:
@@ -320,12 +320,12 @@ class MCStates(Consolidator):
                                        idx: npt.ArrayLike | None = None, condition: Selector | None = None,
                                        save: bool = True, replace: bool = False,
                                        col_name: str = DOMINANT_CONFIG_COL, **kwargs) -> pd.DataFrame | None:
-        if not (self.is_space_set and self.space.are_config_classes_set):
+        if not (self.is_space_set and self.mcspace.are_config_classes_set):
             raise ValueError('Set configuration classes on MCSpace first.')
 
         idx = self.filter(idx=idx, condition=condition)
 
-        config_class = self._df.loc[self._df.index[idx], self.space.config_classes.keys()].idxmax(axis=1)
+        config_class = self._df.loc[self._df.index[idx], self.mcspace.config_classes.keys()].idxmax(axis=1)
 
         df = pd.DataFrame({col_name: config_class})
 
@@ -356,7 +356,7 @@ class MCStates(Consolidator):
         if not ignore_space and not (self.is_space_set and other.is_space_set):
             warnings.warn('At least one of MCStates does not have well defined MCSpace, proceed with caution')
 
-        if not ignore_space and self.space != other.space:
+        if not ignore_space and self.mcspace != other.mcspace:
             raise ValueError('spaces of states are different, overlap is poorly defined')
 
         self.ci_vecs = self.ci_vecs.tocsr()
@@ -371,10 +371,10 @@ class MCStates(Consolidator):
     def merge(self, other: 'MCStates', alignment, strategy: str = 'skip', ignore_space: bool = False) -> NoReturn:
         raise NotImplementedError('merge functionality is not implemented')
 
-        if not ignore_space and (self.space is None or other.space is None):
+        if not ignore_space and (self.mcspace is None or other.mcspace is None):
             warnings.warn('At least one of MCStates does not have well defined MCSpace, proceed with caution')
 
-        if not ignore_space and self.space != other.space:
+        if not ignore_space and self.mcspace != other.mcspace:
             raise ValueError('spaces of states are different, overlap is poorly defined')
 
         for region in alignment:
@@ -397,13 +397,13 @@ class MCStates(Consolidator):
 
         The function does not check for duplicates or overlaps.
         """
-        if not ignore_space and (self.space is None or other.space is None):
+        if not ignore_space and (self.mcspace is None or other.mcspace is None):
             warnings.warn('At least one of MCStates does not have well defined MCSpace, proceed with caution')
 
-        if not ignore_space and self.space != other.space:
+        if not ignore_space and self.mcspace != other.mcspace:
             raise ValueError('spaces of states are different, overlap is poorly defined')
 
-        if self.space.n_act_mo != other.space.n_act_mo:
+        if self.mcspace.n_act_mo != other.mcspace.n_act_mo:
             raise ValueError('number of active MOs is different between instances of MCStates, cannot transfer '
                              'rdm_diags')
 
@@ -452,17 +452,17 @@ class MCStates(Consolidator):
             self.ci_vecs.indices = addr_map.get(self.ci_vecs.indices).values
 
         # Remove old config label classes
-        cols = [label for label in self.space.config_class_labels if label in self._df]
+        cols = [label for label in self.mcspace.config_class_labels if label in self._df]
         self._df.drop(columns=cols, inplace=True)
 
         # Update the space
-        self.space = new_space
+        self.mcspace = new_space
 
     def get_addr_map(self, new_space: MCSpace, transform: ConfigTransform | None) -> pd.Series:
         addrs = np.unique(self.ci_vecs.indices)
 
         # Update configs
-        configs = self.space.graph.get_config(addrs)
+        configs = self.mcspace.graph.get_config(addrs)
         transform(configs)
         new_addrs = new_space.graph.get_address(configs)
         return pd.Series(new_addrs, addrs)
@@ -491,17 +491,17 @@ class MCStates(Consolidator):
             data['C'] = np.hstack((data['C'], coeffs[selected]))
             data['norm'] = np.hstack((data['norm'], coeffs_abs[selected]))
 
-        configs = self.space.graph.get_config(data['addr'])
-        if self.space.graph.is_cas:
+        configs = self.mcspace.graph.get_config(data['addr'])
+        if self.mcspace.graph.is_cas:
             data['config'] = configs[:, 1]
         else:
-            data.update({f'r{i + 1}': configs[:, i] for i in range(self.space.n_spaces)})
+            data.update({f'r{i + 1}': configs[:, i] for i in range(self.mcspace.n_spaces)})
 
-        data['config_repr'] = self.space.graph.get_config_repr(configs)
+        data['config_repr'] = self.mcspace.graph.get_config_repr(configs)
 
-        if len(self.space.config_class_labels):
+        if len(self.mcspace.config_class_labels):
             addrs = np.unique(data['addr'])
-            lookup = self.space.get_address_class_lookup(addrs)
+            lookup = self.mcspace.get_address_class_lookup(addrs)
             data['config_class'] = np.vectorize(lambda i: lookup.get(i, ''))(data['addr'])
 
         df = pd.DataFrame(data)
@@ -523,7 +523,8 @@ class MCStates(Consolidator):
             new_df.copy(deep=True),
             self.ci_vecs[self._state_map[key]],
             self.rdm_diags[self._state_map[key]],
-            space=self.space,
+            mcspace=self.mcspace,
+            spaces=self.spaces,
         )
 
         if self.are_peaks_set:
@@ -557,7 +558,7 @@ class MCStates(Consolidator):
         if not isinstance(other, self.__class__):
             raise TypeError(f'new_states must be an instance of {self.__class__.__name__}')
 
-        if self.space.n_act_mo != other.space.n_act_mo:
+        if self.mcspace.n_act_mo != other.mcspace.n_act_mo:
             raise ValueError('Number of active MOs is different between instances of MCStates, cannot transfer '
                              'rdm_diags')
 
@@ -634,11 +635,11 @@ class MCStates(Consolidator):
 
         E = self._df.loc[idx, self.ENERGY_COL] - (self.min_energy * shift_ground)
 
-        mo_block_labels = [m for m in self.space.mo_block_labels if m in self._df] if include_mo else []
+        mo_block_labels = [m for m in self.mcspace.mo_block_labels if m in self._df] if include_mo else []
         df_rdm = self._df.loc[idx, mo_block_labels].apply(
             lambda r: ' + '.join([f'{l}({v:>5.2f})' for l, v in r.items()]), axis=1)
 
-        config_class_labels = [c for c in self.space.config_class_labels if c in self._df] if include_config_class else []
+        config_class_labels = [c for c in self.mcspace.config_class_labels if c in self._df] if include_config_class else []
         df_config_class = self._df.loc[idx, config_class_labels].apply(
             lambda r: ' + '.join([f'{l}({v:7.3%})' for l, v in r.items()]), axis=1)
 
@@ -657,23 +658,23 @@ class MCStates(Consolidator):
 
             print('-' * BAR_WIDTH)
             print(' Addr'.center(5), end=' ')
-            if self.space.graph.is_cas:
-                print(f'CAS'.center(self.space.graph.spaces.r2), end=' ')
+            if self.mcspace.graph.is_cas:
+                print(f'CAS'.center(self.mcspace.graph.spaces.r2), end=' ')
             else:
-                print(*[f'RAS{i + 1}'.center(w) for i, w in enumerate(self.space.graph.spaces)], end=' ')
+                print(*[f'RAS{i + 1}'.center(w) for i, w in enumerate(self.mcspace.graph.spaces)], end=' ')
             print('Coefficient'.center(32))
 
             # FIXME: use get_state_ci_vec method here
             sl = np.s_[self.ci_vecs.indptr[i]:self.ci_vecs.indptr[i + 1]]
             addrs = self.ci_vecs.indices[sl]
-            configs = self.space.graph.get_config(addrs)
+            configs = self.mcspace.graph.get_config(addrs)
             coeffs = self.ci_vecs.data[sl]
 
             coeffs_abs = np.abs(coeffs) ** 2
             sorted_idx = np.argsort(coeffs_abs)[::-1]
             selected = sorted_idx[:config_limit]
 
-            config_strs = self.space.graph.get_config_repr(configs[selected])
+            config_strs = self.mcspace.graph.get_config_repr(configs[selected])
             addrs = addrs[selected]
             coeffs = coeffs[selected]
             coeffs_abs = coeffs_abs[selected]
@@ -690,29 +691,28 @@ class MCStates(Consolidator):
                   df_key: str = 'df_states',
                   ci_vecs_key: str = 'ci_vecs',
                   rdm_diags_key: str = 'rdm_diags',
-                  space_key: str = 'space',
+                  mcspace_key: str = 'mcspace',
                   source_key: str = 'source',
                   **kwargs) -> 'MCStates':
         data.update(kwargs)
 
-        df = data.pop(df_key)
-        ci_vecs = data.pop(ci_vecs_key)
-        rdm_diags = data.pop(rdm_diags_key)
+        df: pd.DataFrame = data.pop(df_key)
+        ci_vecs: sparse.coo_array = data.pop(ci_vecs_key)
+        rdm_diags: npt.NDArray = data.pop(rdm_diags_key)
 
-        space = data.pop(space_key, None)
+        space: MCSpace | None = data.pop(mcspace_key, None)
         if isinstance(space, dict):
             from .mcspace import MCSpace
             space = MCSpace.from_dict(space)
 
-        states = cls(
+        states: MCStates = cls(
             df, ci_vecs, rdm_diags,
-            source=data.get(source_key, ''), space=space,
+            source=data.get(source_key, ''), mcspace=space,
             sort=kwargs.get('sort_states', False)
         )
 
         try:
             from .mcpeaks import MCPeaks
-
             states.peaks = MCPeaks.from_dict(data, states=states, states_key='states')
         except KeyError:
             pass
@@ -733,7 +733,7 @@ class MCStates(Consolidator):
 
     @property
     def is_space_set(self) -> bool:
-        return self.space is not None
+        return self.mcspace is not None
 
     @property
     def are_peaks_set(self) -> bool:

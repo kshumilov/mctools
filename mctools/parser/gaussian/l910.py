@@ -10,7 +10,9 @@ import pandas as pd
 from scipy import sparse
 
 from ...core.cistring import RASMOs
-from ...core import MCStates, MCPeaks
+from ...core.mcpeaks import MCPeaks
+from ...core.mcstates import MCStates
+from ...core.mcspace import MOSpaces
 
 from ..lib import (
     search_in_file,
@@ -68,17 +70,17 @@ cas_patt = ProcessedPattern(r'CAS\(\s*%se\s*,\s*%so\s*\)' % (
 ), lambda n_e, n_o: RASMOs(0, n_o, 0), default_group_map=int)
 
 ci_spaces_patt = ProcessedPattern(r'\s*'.join([
-    r'NTOrb=\s*%s' % (int_patt % r'n_orb'),
-    r'NIOrb=\s*%s' % (int_patt % r'inactive'),
-    r'NAOrb=\s*%s' % (int_patt % r'active'),
-    r'NVOrb=\s*%s' % (int_patt % r'virtual'),
-]) + r'\s*', 'ci_spaces', default_group_map=int)
+    r'NTOrb=\s*%s' % (int_patt % r'n'),
+    r'NIOrb=\s*%s' % (int_patt % r'i'),
+    r'NAOrb=\s*%s' % (int_patt % r'a'),
+    r'NVOrb=\s*%s' % (int_patt % r'v'),
+]) + r'\s*', lambda n, i, a, v: MOSpaces.from_spaces(a, i, v), default_group_map=int)
 
 sa_start_patt = re.compile(r'SA Weights Read:')
 sa_weight_patt = ProcessedPattern(r'\s*'.join([
     r'State:\s*%s' % simple_int_tmplt,
     r'Weight:\s*%s' % (float_patt % r'w'),
-]) + r'\s*', constructor=lambda w: w, group_maps={'w': float})
+]) + r'\s*', lambda w: w, group_maps={'w': float})
 
 tot_elec_info_patt = ProcessedPattern(r'Electrons, ' + r'\s*'.join([
     r'Alpha=\s*%s' % (int_patt % r'a'),
@@ -107,10 +109,10 @@ def read_mc_spec(file: TextIO, /, *, first_line: str = '') -> tuple[ParsingResul
                                         err_msg='Could not find CI type')
 
     mc_patt = cas_patt if ci_type_info.is_cas else ras_patt
-    ras_mo, line = search_in_file(file, mc_patt, first_line=line)
-    mc_spec.update({'ras': ras_mo, 'n_mo_act': sum(ras_mo)})
+    active_spaces, line = search_in_file(file, mc_patt, first_line=line)
+    mc_spec.update({'active_spaces': active_spaces, 'n_mo_act': sum(active_spaces)})
 
-    mc_spec['mo_all'], line = search_in_file(file, ci_spaces_patt, first_line=line)
+    mc_spec['mo_spaces'], line = search_in_file(file, ci_spaces_patt, first_line=line)
 
     match, line = search_in_file(file, sa_start_patt, first_line=line, n_skips=1)
     if match is not None:
@@ -280,7 +282,7 @@ def read_tdms(file: TextIO, /, *, first_line: str = '') -> tuple[ParsingResult, 
         MCPeaks.OSC_COL: osc_strength,
         'resource_idx': np.arange(len(tdms))
     })
-    return dict(df_peaks=df, tdms=np.stack(list(result['tdms'].values()))), line
+    return dict(df_peaks=df, tdms=np.stack(list(tdms.values()))), line
 
 
 spin_header_patt = re.compile(r'Computing Spin expectation values.')

@@ -343,7 +343,7 @@ class MCPeaks(Consolidator):
 
     @property
     def space(self) -> MCSpace:
-        return self.states.space
+        return self.states.mcspace
 
     @property
     def are_states_set(self) -> bool:

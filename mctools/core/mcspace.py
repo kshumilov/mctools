@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import warnings
 
-from typing import NoReturn, Callable, IO, Any, Literal, Sequence
+from typing import NoReturn, Callable, IO, Any, Literal, Sequence, ClassVar, Type, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -12,12 +12,108 @@ from scipy import sparse
 from .cistring.graphs import RASGraph, RASMOs, Electrons
 from .cistring.utils import ConfigArray, get_elec_count
 
+
+if TYPE_CHECKING:
+    from ..parser.lib import ParsingResult
+
 __all__ = [
+    'MOSpaces',
     'MCSpace',
-    'ConfigTransform'
+    'ConfigTransform',
 ]
 
 ConfigTransform = Callable[[ConfigArray], NoReturn]
+
+
+class MOSpaces:
+    SpacesTuple: ClassVar[Type] = tuple[int, int, int, int, int]
+
+    spaces: SpacesTuple
+    offsets: SpacesTuple
+
+    def __init__(self, spaces: SpacesTuple | tuple[int, int, int] | tuple[int]) -> None:
+        if any(o < 0 for o in spaces):
+            raise ValueError(f'Number of orbitals in spaces must be non-negative: {spaces!r}')
+
+        if len(spaces) == 1:
+            self.spaces = (0, 0, *spaces, 0, 0)
+        elif len(spaces) == 3:
+            self.spaces = (0, *spaces, 0)
+        elif len(spaces) == 5:
+            self.spaces = spaces
+        else:
+            raise ValueError(f'Number of spaces must be equal to 5: {spaces!r}: '
+                             f'frozen core, inactive, active, secondary, frozen virtual')
+
+        offsets = [0]
+        for n_o in self.spaces[:-1]:
+            offsets.append(offsets[-1] + n_o)
+        self.offsets = tuple(offsets)
+
+    @property
+    def frozen_core_space(self) -> slice:
+        return np.s_[0:self.offsets[1]]
+
+    @property
+    def inactive_space(self) -> slice:
+        return np.s_[self.offsets[1]:self.offsets[2]]
+
+    @property
+    def active_space(self) -> slice:
+        return np.s_[self.offsets[2]:self.offsets[3]]
+
+    @property
+    def secondary_space(self) -> slice:
+        return np.s_[self.offsets[3]:self.offsets[4]]
+
+    @property
+    def frozen_virtual_space(self) -> slice:
+        return np.s_[self.offsets[4]:self.offsets[5]]
+
+    @property
+    def n_frozen_core(self) -> int:
+        return self.spaces[0]
+
+    @property
+    def n_core(self) -> int:
+        return self.spaces[1]
+
+    @property
+    def n_inactive(self) -> int:
+        return self.n_frozen_core + self.n_core
+
+    @property
+    def n_active(self) -> int:
+        return self.spaces[2]
+
+    @property
+    def secondary(self) -> int:
+        return self.n_virtual + self.n_frozen_virtual
+
+    @property
+    def n_virtual(self) -> int:
+        return self.spaces[3]
+
+    @property
+    def n_frozen_virtual(self) -> int:
+        return self.spaces[4]
+
+    @property
+    def n(self) -> int:
+        return sum(self.spaces)
+
+    @classmethod
+    def from_spaces(cls, active: int, /, core: int = 0,
+                    virtual: int = 0, frozen_core: int = 0,
+                    frozen_virtual: int = 0) -> 'MOSpaces':
+        spaces = (frozen_core, core, active, virtual, frozen_virtual)
+        return cls(spaces)
+
+    def __repr__(self) -> str:
+        return f'{self.__class__.__name__}(' \
+               f'Inactive=({self.n_frozen_core},{self.n_inactive}), ' \
+               f'Active={self.n_active}, ' \
+               f'Secondary=({self.n_virtual},{self.n_frozen_virtual}))'
 
 
 class MCSpace:
@@ -410,11 +506,18 @@ class MCSpace:
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], **kwargs) -> 'MCSpace':
+    def from_dict(cls, data: ParsingResult, /,
+                  active_spaces_key='active_spaces',
+                  active_elec_key='elec_act',
+                  max_hole_key='max_hole',
+                  max_elec_key='max_elec',
+                  **kwargs) -> 'MCSpace':
         data.update(kwargs)
 
         return cls.from_space_spec(
-            data.pop('ras'), data.pop('elec'), data.pop('max_hole'), data.pop('max_elec'),
+            data.pop(active_spaces_key),
+            data.pop(active_elec_key),
+            data.pop(max_hole_key), data.pop(max_elec_key),
             mo_blocks=data.pop('mo_blocks', None),
             config_classes=data.pop('config_classes', None),
             use_python_int=data.pop('use_python_int', None),
