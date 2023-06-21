@@ -1,5 +1,5 @@
 from .mcspace import *
 from .mcstates import *
 from .mcpeaks import *
-from .mo import *
+from .utils.mo import *
 from .constants import *

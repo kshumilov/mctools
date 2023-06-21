@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
-    from .mcstates import MCStates
+    from ..mcstates import MCStates
 
 __all__ = [
     'get_state_alignment',

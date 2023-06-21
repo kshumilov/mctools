@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from functools import reduce
 from typing import Optional, Sequence
 
@@ -19,17 +21,17 @@ def _construct_ao_map(df_ao: pd.DataFrame, key: str) -> np.ndarray:
     return T
 
 
-def partition_mo(C: np.ndarray, df_ao: pd.DataFrame, S: np.ndarray, /,
-                 by: Optional[list[str]] = None) -> np.ndarray:
+def partition_mo(mo: np.ndarray, df_ao: pd.DataFrame, overlap: np.ndarray, /,
+                 by: list[str] | None = None) -> np.ndarray:
     """Partitions MO coefficients according to selected parameter.
 
     The function works by modifying the orthogonality condition of MO:
         S_MO = C_MO @ S_AO @ C_MO^h, where S_MO is identity, and C_MO^h is adjoint of C_MO
 
     Args:
-        C: Numpy array of shape (#MO, #AO) to be partitioned;
+        mo: Numpy array of shape (#MO, #AO) to be partitioned;
         df_ao: Pandas dataframe of length #AO that provides information about AOs;
-        S: Numpy array of (#AO, #AO) storing AO overlap matrix;
+        overlap: Numpy array of (#AO, #AO) storing AO overlap matrix;
 
     Keyword Args:
         by: list of columns in df_ao to aggregate by: by=['atom', 'l', ...]
@@ -37,29 +39,29 @@ def partition_mo(C: np.ndarray, df_ao: pd.DataFrame, S: np.ndarray, /,
     Returns:
         Numpy array of shape (#MO, #{unique values, in col}) as specified by the inputs.
     """
-    n_mo, n_ao = C.shape
+    n_mo, n_ao = mo.shape
     if n_ao != len(df_ao):
         raise ValueError("AO mismatch between C and df_ao")
 
     Ts: list[np.ndarray] = []
     by: list[str] = by if by is not None else []
 
-    for col_name in by:
-        col = df_ao[col_name]
-        values = col.unique()
+    for prop_name in by:
+        prop = df_ao[prop_name]
+        values = prop.unique()
         values.sort()
 
-        T: np.ndarray = np.tile(values[:, np.newaxis], n_ao) == col.values
+        T: np.ndarray = np.tile(values[:, np.newaxis], n_ao) == prop.values
         Ts.append(T)
 
-    C_inv = S @ C.T.conj()  # (#AOs, #MOs)
+    C_inv = overlap @ mo.T.conj()  # (#AOs, #MOs)
 
     if Ts:
         T = reduce(lambda x, y: x[..., np.newaxis, :] * y, Ts)
-        I = T @ (C.T * C_inv)
+        I = T @ (mo.T * C_inv)
         I = I.transpose(-1, *list(range(len(Ts))))
     else:
-        I = np.diag(C @ C_inv)
+        I = np.diag(mo @ C_inv)
 
     return I
 
