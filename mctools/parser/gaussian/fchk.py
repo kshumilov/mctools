@@ -1,9 +1,13 @@
+import re
+
 from collections import defaultdict
 from typing import TextIO, Callable, Type
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+
+from ...core.molecule import Molecule
 
 from ..lib import (
     search_in_file,
@@ -25,6 +29,9 @@ __all__ = [
     'read_molecular_geometry',
     'read_ao_basis',
     'read_mo_coefficients',
+
+    'mo_to_fchk_str',
+    'find_header_offset',
 
     'parse_gdvfchk',
 
@@ -93,7 +100,7 @@ def read_fchk_array(file: TextIO, header: str, /, *, first_line: str ='') -> tup
 
 
 method_patt = ProcessedPattern(
-    r'(?P<calc>[a-zA-Z]+)\s*(?P<method>(?P<restriction>R|RO|U|G)\w+)\s*(?P<basis>\w+)'
+    r'(?P<calc>[a-zA-Z]+)\s*(?P<method>(?P<restriction>R|RO|U|G)\w+)\s*(?P<basis_name>\w+)'
 )
 
 
@@ -130,7 +137,13 @@ def read_molecular_geometry(file: TextIO, /, first_line: str = '') -> tuple[Pars
     atomic_number, line = read_fchk_array(file, 'Atomic numbers', first_line=first_line)
     coords, line = read_fchk_array(file, 'Current cartesian coordinates', first_line=line)
     coords = coords.reshape((len(atomic_number), 3))
-    return {'atomic_number': atomic_number, 'coords': coords}, line
+
+    df = pd.DataFrame({
+        Molecule.ATOMIC_NUMBER_COL: atomic_number,
+        Molecule.ATOM_COL: np.arange(atomic_number.shape[0]) + 1,
+        **{col: arr for col, arr in zip(Molecule.COORDS_COLS, coords.T)}
+    })
+    return {'df_molecule': df}, line
 
 
 def read_ao_basis(file: TextIO, /,
@@ -178,38 +191,63 @@ def read_ao_basis(file: TextIO, /,
         shells['element'] = atomic_number[shells['atom']]
         aos['element'] = atomic_number[aos['atom']]
 
-    if restriction == 'G':
-        aos = aos.loc[aos.index.repeat(2)].reset_index(drop=True)
-        aos['spin'] = aos.index % 2
-
     return {
         'df_shells': shells,
         'df_ao': aos,
-        'exponents': primitive_exponents,
-        'coefficients': contraction_coeffs,
+        'prim_exp': primitive_exponents,
+        'prim_coeff': contraction_coeffs,
     }, line
 
 
 def read_mo_coefficients(file: TextIO, n_ao: int, /,
                          restriction: str = 'R', *,
                          first_line: str = '') -> tuple[ParsingResult, str]:
-    raw_mo, line = read_fchk_array(file, 'Alpha MO coefficients', first_line=first_line)
+    molorb_raw_a, line = read_fchk_array(file, 'Alpha MO coefficients', first_line=first_line)
 
     match restriction:
         case 'R':
-            C_MO = raw_mo.reshape(-1, n_ao)
+            molorb = molorb_raw_a.reshape(-1, n_ao)
         case 'U':
-            raw_mo_b, line = read_fchk_array(file, 'Beta MO coefficients', first_line=line)
-            C_MO = np.zeros((n_ao, n_ao), dtype=np.float_)
-            C_MO[0::2, 0::2] = raw_mo.reshape(-1, n_ao)
-            C_MO[1::2, 1::2] = raw_mo_b.reshape(-1, n_ao)
+            molorb_raw_b, line = read_fchk_array(file, 'Beta MO coefficients', first_line=line)
+            molorb = np.zeros((n_ao, n_ao), dtype=np.float_)
+            molorb[0::2, 0::2] = molorb_raw_a.reshape(-1, n_ao)
+            molorb[1::2, 1::2] = molorb_raw_b.reshape(-1, n_ao)
         case 'G':
-            C_MO = raw_mo[0::2] + raw_mo[1::2] * 1.j
-            C_MO = C_MO.reshape(-1, n_ao * 2)  # (#MOs, #AOs)
+            molorb = molorb_raw_a[0::2] + molorb_raw_a[1::2] * 1.j
+            molorb = molorb.reshape(-1, n_ao * 2)  # (#MOs, #AOs)
         case _:
             raise ValueError(f'Invalid MO restriction is specified: {restriction}')
 
-    return {'C_MO': C_MO}, line
+    return {'molorb': molorb}, line
+
+
+def mo_to_fchk_str(mo: np.ndarray, /, n_per_line: int = 5, fmt: str = '%16.8E') -> str:
+    values = mo.flatten()
+
+    if values.dtype is np.dtype(np.complex128):
+        new_values = np.zeros(len(values) * 2, dtype=np.float_)
+        new_values[0::2] = values.real
+        new_values[1::2] = values.imag
+        values = new_values
+
+    strs = [fmt % v for v in values]
+
+    n_batches = len(strs) // n_per_line
+
+    s = ''
+    for i in range(n_batches):
+        s += ''.join(strs[i * n_per_line:(i + 1) * n_per_line]) + '\n'
+
+    return s
+
+
+def find_header_offset(filename: str, header: str, /, first_line: str = '') -> int | None:
+    patt = FCHK_ARRAY_PATT.update_pattern(header)
+    with open(filename, 'r') as file:
+        fchk_arr_info, line = search_in_file(file, patt, first_line=first_line,
+                                             err_msg=f'Could not find FCHK array: {header}')
+        return fchk_arr_info, line, file.tell()
+
 
 
 fchk_parser_funcs_general = [
