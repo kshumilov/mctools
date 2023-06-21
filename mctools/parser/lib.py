@@ -10,6 +10,8 @@ from dataclasses import dataclass, field, InitVar, replace
 from typing import TextIO, Callable, Any, NoReturn, TypeVar, ClassVar, Iterator, AnyStr
 
 __all__ = [
+    'DIMS_MAP',
+
     'ParsingResult',
     'MatchDict', 'GroupMap', 'MatchFunc',
     'GroupMaps', 'MatchFuncs',
@@ -34,6 +36,8 @@ __all__ = [
 
     'PatternNotFound',
 ]
+
+DIMS_MAP = {'x': 0, 'y': 1, 'z': 2}
 
 ParsingResult = dict[str, Any]
 

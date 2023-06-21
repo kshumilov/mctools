@@ -1,9 +1,6 @@
-import os.path
 import re
 
 from typing import TextIO
-
-import numpy as np
 
 from ..lib import ParsingResult
 from .utils import read_matrix_in_file
@@ -12,6 +9,8 @@ __all__ = [
     'l302_parser_funcs_general',
     'l302_parser_funcs_x2c',
     'l302_parser_funcs_all',
+
+    'STV_INTEGRALS',
 ]
 
 ovlp_header = re.compile(r'\*\*\* Overlap \*\*\*')
@@ -25,26 +24,25 @@ x2c_header = re.compile(r'DK / X2C integrals')  # Appears 5 times
 ortho_header = re.compile(r'Orthogonalized basis functions:')
 
 
+STV_INTEGRALS = [
+    'overlap', 'kinetic', 'potential',
+]
+
+
 def read_ao_overlap_matrix(file: TextIO, /,
-                           restriction: str = 'R', *,
                            first_line: str = '') -> tuple[ParsingResult, str]:
     matrix, line = read_matrix_in_file(file, ovlp_header, first_line=first_line)
-    match restriction:
-        case 'G':
-             I2 = np.eye(2)
-             matrix = np.kron(matrix, I2)  # (#AOs, #AOs)
-
-    return dict(overlap=matrix), line
+    return {'overlap': matrix}, line
 
 
 def read_ao_kinetic_energy_matrix(file: TextIO, first_line: str = '') -> tuple[ParsingResult, str]:
     matrix, line = read_matrix_in_file(file, kinetic_header, first_line=first_line)
-    return dict(kinetic=matrix), line
+    return {'kinetic': matrix}, line
 
 
 def read_ao_hcore_matrix(file: TextIO, *, first_line: str = '') -> tuple[ParsingResult, str]:
     matrix, line = read_matrix_in_file(file, hcore_header, first_line=first_line)
-    return dict(hcore=matrix), line
+    return dict(potential=matrix), line
 
 
 def read_veff_p_matrix(file: TextIO, *, first_line: str = '') -> tuple[ParsingResult, str]:
@@ -94,7 +92,6 @@ l302_parser_funcs_general = {
         read_ao_overlap_matrix,
         read_ao_kinetic_energy_matrix,
         read_ao_hcore_matrix,
-        read_orthogonal_aos_matrix,
     ]
 }
 
@@ -104,7 +101,6 @@ l302_parser_funcs_x2c = {
         read_trel_r_matrix,
         read_veff_r_matrix,
         read_so_unc_matrices,
-        read_ao_overlap_matrix,
     ]
 }
 
