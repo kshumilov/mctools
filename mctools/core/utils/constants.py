@@ -6,7 +6,7 @@ import pandas as pd
 from scipy import constants
 
 __all__ = [
-    'g_e',
+    'g_e', 'alpha',
 
     'Eh2eV', 'eV2Eh', 'wn2eV',
     'sigma_0', 'sigma_x', 'sigma_y', 'sigma_z', 'sigma_vector',
@@ -18,6 +18,7 @@ __all__ = [
     'ANGULAR_MOMENTUM_SYMBS',
 ]
 
+alpha = constants.alpha
 g_e = constants.value('electron g factor')
 
 Eh2eV = constants.value('Hartree energy in eV')
