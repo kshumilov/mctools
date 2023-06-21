@@ -7,10 +7,10 @@ from .utils import read_matrix_in_file
 
 __all__ = [
     'l302_parser_funcs_general',
+    'l302_postprocess_general',
+
     'l302_parser_funcs_x2c',
     'l302_parser_funcs_all',
-
-    'STV_INTEGRALS',
 ]
 
 ovlp_header = re.compile(r'\*\*\* Overlap \*\*\*')
@@ -43,6 +43,13 @@ def read_ao_kinetic_energy_matrix(file: TextIO, first_line: str = '') -> tuple[P
 def read_ao_hcore_matrix(file: TextIO, *, first_line: str = '') -> tuple[ParsingResult, str]:
     matrix, line = read_matrix_in_file(file, hcore_header, first_line=first_line)
     return dict(potential=matrix), line
+
+
+def postprocess_stv_integrals(result: ParsingResult, integrals_key: str = 'integrals') -> None:
+    integrals = result.setdefault(integrals_key, {})
+    for integral in STV_INTEGRALS:
+        if integral in result:
+            integrals[integral] = result.pop(integral)
 
 
 def read_veff_p_matrix(file: TextIO, *, first_line: str = '') -> tuple[ParsingResult, str]:
@@ -87,6 +94,12 @@ def read_orthogonal_aos_matrix(file: TextIO, *, first_line: str = '') -> tuple[P
     return dict(ortho=matrix), line
 
 
+l302_postprocess_general = {
+    'l302': [
+        postprocess_stv_integrals,
+    ]
+}
+
 l302_parser_funcs_general = {
     'l302': [
         read_ao_overlap_matrix,
@@ -94,6 +107,7 @@ l302_parser_funcs_general = {
         read_ao_hcore_matrix,
     ]
 }
+
 
 l302_parser_funcs_x2c = {
     'l302': [
@@ -103,6 +117,7 @@ l302_parser_funcs_x2c = {
         read_so_unc_matrices,
     ]
 }
+
 
 l302_parser_funcs_all = {
     'l302': [

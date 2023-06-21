@@ -16,7 +16,8 @@ __all__ = [
     'read_multipole_matrices',
     'read_rxdel_matrices',
 
-    'l303_parser_funcs',
+    'l303_parser_funcs_general',
+    'l303_postprocess_general',
 ]
 
 
@@ -84,12 +85,26 @@ def read_rxdel_matrices(file: TextIO, *, first_line: str = '') -> tuple[ParsingR
     return {'rxdel': np.stack(matrices)}, line
 
 
+def postprocess_multipole_integrals(result: ParsingResult, integrals_key: str = 'integrals') -> None:
+    integrals = result.setdefault(integrals_key, {})
+    for integral in MULTIPOLE_INTEGRALS + ['rxdel']:
+        if integral in result:
+            integrals[integral] = result.pop(integral)
+
+
 fermi_header = re.compile(r'Fermi contact integrals:')  # Not square
 
 
-l303_parser_funcs: dict[str, list[Callable]] = {
+l303_parser_funcs_general: dict[str, list[Callable]] = {
     'l303': [
         read_multipole_matrices,
         read_rxdel_matrices,
     ],
+}
+
+
+l303_postprocess_general = {
+    'l303': [
+        postprocess_multipole_integrals,
+    ]
 }

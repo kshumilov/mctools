@@ -8,11 +8,11 @@ from typing import TextIO, Callable, TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
-from ..lib import search_in_file, parse_file
+from ..lib import search_in_file, parse_file, ParsingResult
 
 
 if TYPE_CHECKING:
-    from ..lib import ParsingResult, MatchDict
+    from ..lib import MatchDict
 
 __all__ = [
     'process_complex_match',
@@ -93,30 +93,38 @@ def read_matrix_in_file(file: TextIO, header: re.Pattern, first_line: str = '',
 
 link_start_tmplt = r'\(Enter\s*[/\w\-]*%s\.exe\)'
 
+PostProcessor = Callable[[ParsingResult], None]
+
 
 def parse_link(file: TextIO, link: str, read_funcs: list[Callable], result: ParsingResult, /,
-               post_process: Callable[[ParsingResult], None] | None = None, *,
+               postprocessors: list[PostProcessor] | None = None, *,
                first_line: str = '') -> tuple[ParsingResult, str]:
     link_start_patt = re.compile(link_start_tmplt % link)
     _, line = search_in_file(file, link_start_patt, first_line=first_line,
                              err_msg=f'No link {link} information is found')
 
-    link_result = parse_file(file, read_funcs, result, first_line=line)
-    if post_process is not None:
-        post_process(link_result)
+    link_result, line = parse_file(file, read_funcs, result, first_line=line)
+    if postprocessors is not None:
+        for postprocessor in postprocessors:
+            postprocessor(link_result)
 
-    return link_result
+    return link_result, line
 
 
-def parse_gdvlog(filename: str, links: dict[str, list[Callable]], /, **kwargs) -> ParsingResult:
+def parse_gdvlog(filename: str, links: dict[str, list[Callable]], /,
+                 postprocess_links: dict[str, list[PostProcessor]] | None = None,
+                 **kwargs) -> ParsingResult:
     result: ParsingResult = {'source': filename, **kwargs}
 
+    postprocess_links = postprocess_links if postprocess_links else {}
     with open(filename, 'r') as file:
         print(f'Reading {filename}')
 
         line = ''
         for link, funcs in links.items():
             print(f'Parsing link {link}')
-            data, line = parse_link(file, link, funcs, result, first_line=line)
+            data, line = parse_link(file, link, funcs, result,
+                                    postprocessors=postprocess_links.get(link, None),
+                                    first_line=line)
             result.update(data)
     return result
