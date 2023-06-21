@@ -1,15 +1,16 @@
 import warnings
 
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from .mcspace import MCSpace
+from .mcspace import MCSpace, MOSpaces
 from .base import Consolidator, Selector
 from .mcstates import MCStates
 from .constants import Eh2eV
+
 
 # from .utils import get_state_alignment, get_state_map_from_alignment, StateAlignment
 
@@ -57,35 +58,66 @@ class MCPeaks(Consolidator):
 
     IDX_COLS = [INITIAL_STATE_COL, FINAL_STATE_COL, SOURCE_COL]
     INIT_COLS = [INITIAL_STATE_COL, FINAL_STATE_COL, OSC_COL]
-    DEFAULT_COLS = [INITIAL_STATE_COL, FINAL_STATE_COL, SOURCE_COL, OSC_COL]
+    DEFAULT_COLS = [INITIAL_STATE_COL, FINAL_STATE_COL, OSC_COL] + [SOURCE_COL, Consolidator.RESOURCE_COL]
 
     __slots__ = [
         'states',
+        'tdms',
     ]
 
-    states: Optional[MCStates]
+    tdms: npt.NDArray | None
+    states: MCStates | None
 
     def __init__(self,
                  df: pd.DataFrame, /,
                  source: str = '',
-                 states: Optional[MCStates] = None, *,
-                 sort: bool = False, keep_dark: bool = False) -> None:
+                 states: MCStates | None = None,
+                 tdms: npt.NDArray | None = None, *,
+                 sort: bool = False,
+                 keep_dark: bool = True) -> None:
         # TODO: implement validation of peaks against states.df
         super(MCPeaks, self).__init__(df, source=source, sort=False)
 
-        self.states = states
+        # Validate and set MCStates, if provided
+        self.states: MCStates | None = states
         if not self.are_states_set:
             warnings.warn("'states' attribute is not provided, expect reduced functionality")
         else:
             self.calculate_peak_energy(save=True, replace=True)
 
+        # Validate and set TDMs, if provided
+        self.tdms: npt.NDArray | None = tdms
+        if self.tdms is not None:
+            if self.tdms.ndim != 3:
+                raise ValueError(f'Number of dimensions in TDMs array must be three: {tdms.ndim} != 3')
+
+            if self.tdms.shape[-1] != tdms.shape[-2]:
+                raise ValueError(f'Last two dimensions must be equal: {tdms.shape}')
+
+            if self.are_states_set and self.space.n_act_mo != tdms.shape[-1]:
+                raise ValueError(f'Last two dimensions must be equal to the size of active space: '
+                                 f'{tdms.shape[-1]} != {self.space.n_act_mo}')
+
+            if self.RESOURCE_COL not in self.df:
+                if len(tdms) != len(self):
+                    raise ValueError(f'Number of TDMs must be equal to the number of peaks: {len(tdms)} != {len(self)}')
+
+                self._df[self.RESOURCE_COL] = np.arange(len(tdms))
+
         if not keep_dark:
-            idx = self.filter(condition=lambda df: df[self.OSC_COL] > 0.0)
-            self._df = self._df.loc[idx].copy(deep=True)
-            self.reset_index()
+            self.drop_dark()
 
         if sort:
             self.sort(col=self.DE_COL)
+
+    def drop_dark(self) -> None:
+        idx = self.filter(condition=lambda df: df[self.OSC_COL] > 0.0)
+        self._df = self._df.loc[idx].copy(deep=True)
+
+        self.tdms = self.tdms[self._df[self.RESOURCE_COL].values]
+        self._df[self.RESOURCE_COL] = np.arange(len(self.tdms))
+
+        self.reset_index()
 
     def analyze(self: 'MCPeaks', save: bool = True, replace: bool = False) -> pd.DataFrame | None:
         self.clear_properties()
@@ -99,6 +131,16 @@ class MCPeaks(Consolidator):
 
         if not save:
             return pd.concat([self._df[self.OSC_COL], *dfs], axis=1)
+
+    def contract_tdms(self, integral: npt.NDArray, spaces: MOSpaces) -> npt.NDArray:
+        idx = self._df['resource_idx'].values
+
+        int_as = integral[..., *spaces.active_2d]
+        mel_as = np.einsum('...kl,jlk->j...', int_as, self.tdms[idx], optimize='optimal')  # matrix element active space
+
+        int_is = integral[..., *spaces.inactive_2d]
+        mel_is = int_is.trace(axis1=-1, axis2=-2)
+        return mel_as + mel_is
 
     def get_state_properties(self: 'MCPeaks', props: list[str],
                              save: bool = True, replace: bool = False) -> pd.DataFrame | None:
@@ -138,16 +180,16 @@ class MCPeaks(Consolidator):
             left_on=[self.INITIAL_STATE_COL, self.SOURCE_COL],
             copy=True,
         ).drop(
-            columns=self.states.SOURCE_COL,
+            columns=[self.states.SOURCE_COL],
         ).rename(
             columns={self.states.STATE_COL: self.INITIAL_COL}
         ).merge(
             df_states, how='left',
-            columns=self.states.SOURCE_COL,
+            right_on=self.states.IDX_COLS,
             left_on=[self.FINAL_STATE_COL, self.SOURCE_COL],
             copy=True,
         ).drop(
-            columns=self.states.STATE_COL + self.IDX_COLS,
+            columns=[self.states.SOURCE_COL] + self.IDX_COLS,
         ).rename(
             columns={self.states.STATE_COL: self.FINAL_COL}
         )
@@ -298,20 +340,33 @@ class MCPeaks(Consolidator):
     @classmethod
     def from_dict(cls, data: dict[str, Any], /,
                   df_key: str = 'df_peaks',
-                  states_key: str = 'states',
                   source_key: str = 'source',
+                  states_key: str = 'states',
+                  tdms_key: str = 'tdms',
+                  instance_key: str = 'peaks',
                   **kwargs) -> 'MCPeaks':
-        data.update(kwargs)
+        if isinstance(instance := data.get(instance_key, None), cls):
+            return instance
+        elif isinstance(instance, dict):
+            instance = cls.from_dict(instance, **kwargs)
+        elif instance is None:
+            data.update(kwargs)
 
-        df = data.pop(df_key)
-        source = data.get(source_key, '')
+            df = data.pop(df_key)
+            source = data.get(source_key, '')
 
-        return cls(
-            df, source=source,
-            states=data.get(states_key, None),
-            keep_dark=kwargs.get('keep_dark', False),
-            sort=kwargs.get('sort_peaks', True),
-        )
+            instance = data.setdefault(instance_key, cls(
+                df, source,
+                states=data.get(states_key, None),
+                tdms=data.pop(tdms_key, None),
+                keep_dark=kwargs.get('keep_dark', True),
+                sort=kwargs.get('sort_peaks', True),
+            ))
+        else:
+            raise ValueError(f"{cls.__name__} did not recognized '{instance_key}' "
+                             f"item in data: {instance}")
+
+        return instance
 
     # @classmethod
     # def from_spectra(cls, spectra: list['MCPeaks'], /, **kwargs) -> 'MCPeaks':
