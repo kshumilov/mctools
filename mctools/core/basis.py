@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING, ClassVar, Type, NoReturn, Any
+from typing import TYPE_CHECKING, ClassVar, Type, NoReturn
 
 import numpy as np
 import pandas as pd
 import numpy.typing as npt
 
 from .molecule import Molecule
-from .utils.mo import partition_mo
+from .utils.mo import partition_molorb, partorb_to_df
 
 if TYPE_CHECKING:
     from ..parser.lib import ParsingResult
@@ -123,15 +123,22 @@ class Basis:
                                               f'restriction is not implemented.')
         return self.df.copy(deep=True)
 
-    def partition_mo(self, mo: npt.NDArray, /, overlap_key: str = 'overlap', spin_blocked: bool = False, **kwargs) -> npt.NDArray:
-        if mo.shape[self.MO_AO_DIM] != (self.n_ao * self.n_comp):
+    def partition_molorb(self, molorb: npt.NDArray, /, overlap_key: str = 'overlap', spin_blocked: bool = False,
+                         to_df: bool = True, **kwargs) -> npt.NDArray | pd.DataFrame:
+        if molorb.shape[self.MO_AO_DIM] != (self.n_ao * self.n_comp):
             raise ValueError(f'#AOs in C_MO[#MOs, #AOs] does not '
-                             f'match #AOs in the basis: {self.n_ao} != {mo.shape}')
+                             f'match #AOs in the basis: {self.n_ao} != {molorb.shape}')
 
         S = self.get_integral(overlap_key, spin_blocked=spin_blocked)
         aos = self.get_aos()
 
-        return partition_mo(mo, aos, S, **kwargs)
+        partorb = partition_molorb(molorb, aos, S, **kwargs)
+
+        if to_df:
+            by = kwargs.get('by', [])
+            return partorb_to_df(partorb, aos, by)
+
+        return partorb
 
     @classmethod
     def from_dict(cls, data: ParsingResult, /,

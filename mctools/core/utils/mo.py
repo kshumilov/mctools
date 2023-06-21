@@ -6,8 +6,12 @@ from typing import Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from .constants import ANGULAR_MOMENTUM_SYMBS
+from .constants import PeriodicTable as PT
+
 __all__ = [
-    'partition_mo',
+    'partition_molorb',
+    'partorb_to_df',
     'get_natural_orbitals',
 ]
 
@@ -21,15 +25,15 @@ def _construct_ao_map(df_ao: pd.DataFrame, key: str) -> np.ndarray:
     return T
 
 
-def partition_mo(mo: np.ndarray, df_ao: pd.DataFrame, overlap: np.ndarray, /,
-                 by: list[str] | None = None) -> np.ndarray:
+def partition_molorb(molorb: np.ndarray, df_ao: pd.DataFrame, overlap: np.ndarray, /,
+                     by: list[str] | None = None) -> np.ndarray:
     """Partitions MO coefficients according to selected parameter.
 
     The function works by modifying the orthogonality condition of MO:
         S_MO = C_MO @ S_AO @ C_MO^h, where S_MO is identity, and C_MO^h is adjoint of C_MO
 
     Args:
-        mo: Numpy array of shape (#MO, #AO) to be partitioned;
+        molorb: Numpy array of shape (#MO, #AO) to be partitioned;
         df_ao: Pandas dataframe of length #AO that provides information about AOs;
         overlap: Numpy array of (#AO, #AO) storing AO overlap matrix;
 
@@ -39,11 +43,11 @@ def partition_mo(mo: np.ndarray, df_ao: pd.DataFrame, overlap: np.ndarray, /,
     Returns:
         Numpy array of shape (#MO, #{unique values, in col}) as specified by the inputs.
     """
-    n_mo, n_ao = mo.shape
+    n_mo, n_ao = molorb.shape
     if n_ao != len(df_ao):
         raise ValueError("AO mismatch between C and df_ao")
 
-    Ts: list[np.ndarray] = []
+    partitions: list[np.ndarray] = []
     by: list[str] = by if by is not None else []
 
     for prop_name in by:
@@ -51,19 +55,56 @@ def partition_mo(mo: np.ndarray, df_ao: pd.DataFrame, overlap: np.ndarray, /,
         values = prop.unique()
         values.sort()
 
-        T: np.ndarray = np.tile(values[:, np.newaxis], n_ao) == prop.values
-        Ts.append(T)
+        partition: np.ndarray = np.tile(values[:, np.newaxis], n_ao) == prop.values
+        partitions.append(partition)
 
-    C_inv = overlap @ mo.T.conj()  # (#AOs, #MOs)
+    C_inv = overlap @ molorb.T.conj()  # (#AOs, #MOs)
 
-    if Ts:
-        T = reduce(lambda x, y: x[..., np.newaxis, :] * y, Ts)
-        I = T @ (mo.T * C_inv)
-        I = I.transpose(-1, *list(range(len(Ts))))
+    if partitions:
+        partition = reduce(lambda x, y: x[..., np.newaxis, :] * y, partitions)
+        partorb = partition @ (molorb.T * C_inv)
+        partorb = partorb.transpose(-1, *list(range(len(partitions))))
     else:
-        I = np.diag(mo @ C_inv)
+        partorb = np.diag(molorb @ C_inv)
 
-    return I
+    return partorb
+
+
+def partorb_to_df(partorb: np.ndarray, df_ao: pd.DataFrame, by: list[str] | None = None) -> pd.DataFrame:
+    by = by if by is not None else []
+
+    if len(by) != partorb.ndim - 1:
+        raise ValueError(f'Mismatch between partitioning indices (by) and '
+                         f'partitioned orbital shape: {len(by)} != {partorb.ndim - 1}')
+
+    indices = [np.arange(partorb.shape[0])]
+
+    for column in by:
+        if column == 'l':
+            l = df_ao[column].unique()
+            l.sort()
+            indices.append(ANGULAR_MOMENTUM_SYMBS[l])
+        elif column == 'atom':
+            atm = df_ao[column].unique()
+            indices.append(atm + 1)
+        elif column == 'element':
+            Z = df_ao[column].unique()
+            Z.sort()
+            indices.append(PT.Symbol[Z - 1])
+        else:
+            raise ValueError(f'Cannot partition by column: {column}')
+
+    midx = pd.MultiIndex.from_product(indices, names=['mo'] + by)
+
+    df = pd.DataFrame(partorb.flatten(), index=midx, columns=['C'])
+    df.reset_index(inplace=True)
+    df['C_abs'] = np.abs(df['C'])
+
+    df = df.pivot_table(index='mo', columns=by)
+    df['max_C'] = df['C_abs'].max(axis=1)
+    df['assign'] = df['C_abs'].idxmax(axis=1)
+    # df['element'], df['L'] = zip(*df['assign'])
+    return df
 
 
 def get_natural_orbitals(rdms: np.ndarray, /,
