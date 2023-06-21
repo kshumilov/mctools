@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -26,7 +28,7 @@ eV2Eh = 1 / Eh2eV
 wn2eV = 1.23981e-4
 
 Bh2Ang = 0.529177249
-PeriodicTable = pd.read_csv('periodic_table.csv')
+PeriodicTable = pd.read_csv(os.path.join(os.path.dirname(__file__), 'periodic_table.csv'))
 
 sigma_0 = np.eye(2)
 sigma_z = np.asarray([[1, 0], [0, -1]])
