@@ -19,6 +19,8 @@ __all__ = [
     'read_matrix_in_file',
 
     'parse_link',
+    'link_start_tmplt',
+
     'parse_gdvlog',
 ]
 
@@ -93,11 +95,17 @@ link_start_tmplt = r'\(Enter\s*[/\w\-]*%s\.exe\)'
 
 
 def parse_link(file: TextIO, link: str, read_funcs: list[Callable], result: ParsingResult, /,
+               post_process: Callable[[ParsingResult], None] | None = None, *,
                first_line: str = '') -> tuple[ParsingResult, str]:
     link_start_patt = re.compile(link_start_tmplt % link)
     _, line = search_in_file(file, link_start_patt, first_line=first_line,
                              err_msg=f'No link {link} information is found')
-    return parse_file(file, read_funcs, result, first_line=line)
+
+    link_result = parse_file(file, read_funcs, result, first_line=line)
+    if post_process is not None:
+        post_process(link_result)
+
+    return link_result
 
 
 def parse_gdvlog(filename: str, links: dict[str, list[Callable]], /, **kwargs) -> ParsingResult:
