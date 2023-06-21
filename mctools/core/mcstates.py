@@ -11,7 +11,7 @@ import pandas as pd
 from scipy import sparse
 
 from .base import Consolidator
-from .constants import Eh2eV
+from .utils.constants import Eh2eV
 from .mcspace import MCSpace
 
 if TYPE_CHECKING:

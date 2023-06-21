@@ -9,7 +9,7 @@ import pandas as pd
 from .mcspace import MCSpace, MOSpaces
 from .base import Consolidator, Selector
 from .mcstates import MCStates
-from .constants import Eh2eV
+from .utils.constants import Eh2eV
 
 
 # from .utils import get_state_alignment, get_state_map_from_alignment, StateAlignment
