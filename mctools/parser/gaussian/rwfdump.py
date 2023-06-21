@@ -113,7 +113,7 @@ def read_ci_vectors(filename: str, n_vecs: int, n_det: int,
         n_buffer += left
 
         # Construct CI vector and calculate squared norms of its coefficients
-        true_vec = buffer[::2] + buffer[1::2] * 1.j
+        true_vec = buffer[0::2] + buffer[1::2] * 1.j
         norm_vec = np.abs(true_vec) ** 2
 
         # Sort CI coefficients in descending order and calculate cumulative norm

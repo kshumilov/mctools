@@ -43,9 +43,10 @@ class Consolidator(abc.ABC):
     """
     IDX_NAME = 'idx'
     SOURCE_COL = 'source'
+    RESOURCE_COL = 'resource_idx'
 
     IDX_COLS: list[str] = []
-    DEFAULT_COLS: list[str] = []
+    DEFAULT_COLS: list[str] = [SOURCE_COL, RESOURCE_COL]
 
     __slots__ = [
         '_df',
@@ -117,8 +118,8 @@ class Consolidator(abc.ABC):
 
     def validate_df(self: 'Consolidator', new_df: pd.DataFrame) -> pd.DataFrame:
         for col in self.DEFAULT_COLS:
-            if col not in new_df:
-                raise ValueError(f"'df' must have {col}")
+            if col not in [self.SOURCE_COL, self.RESOURCE_COL] and col not in new_df:
+                raise ValueError(f"'df' must have '{col}' amongst {self.DEFAULT_COLS}")
         return new_df
 
     def add_properties(self: 'Consolidator', data: npt.ArrayLike, names: str | Sequence[str], replace=True) -> pd.DataFrame:

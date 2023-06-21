@@ -136,11 +136,11 @@ class SimpleGraph:
         """Builds indices of non-zero elements of the graph.
 
         For convenience the Full CI graph is stored in (#elec + 1, #orb + 1)-shaped arrays.
-        However, there are only (#elec + 1, #orb - #elec + 1) non-zero elements
+        However, there are only (#elec + 1) * (#orb - #elec + 1) non-zero elements
         which form a slanted array.
 
         For example, here is directly ordered weights of CAS(7o, 3e) in Kramer's unrestricted formalism:
-              <--#o - #e + 1-->
+              <--#orb - #elec + 1-->
               0   1   2   3   4   5   6   7 --- #orb + 1
            ---------------------------------
         0 -|  1   1   1   1   1   0   0   0

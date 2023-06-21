@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import warnings
 
-from typing import NoReturn, Callable, IO, Any, Literal, Sequence, ClassVar, Type, TYPE_CHECKING
+from typing import NoReturn, Callable, IO, Literal, Sequence, ClassVar, Type, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -28,10 +28,19 @@ ConfigTransform = Callable[[ConfigArray], NoReturn]
 class MOSpaces:
     SpacesTuple: ClassVar[Type] = tuple[int, int, int, int, int]
 
+    __slots__ = [
+        'spaces',
+        'mcspace',
+
+        'offsets',
+    ]
+
     spaces: SpacesTuple
+    mcspace: MCSpace | None
+
     offsets: SpacesTuple
 
-    def __init__(self, spaces: SpacesTuple | tuple[int, int, int] | tuple[int]) -> None:
+    def __init__(self, spaces: SpacesTuple | tuple[int, int, int] | tuple[int], *, mcspace: MCSpace | None = None) -> None:
         if any(o < 0 for o in spaces):
             raise ValueError(f'Number of orbitals in spaces must be non-negative: {spaces!r}')
 
@@ -45,30 +54,55 @@ class MOSpaces:
             raise ValueError(f'Number of spaces must be equal to 5: {spaces!r}: '
                              f'frozen core, inactive, active, secondary, frozen virtual')
 
+        self.mcspace = mcspace
+        if self.mcspace is not None and mcspace.n_act_mo != self.n_active:
+            raise ValueError(f'Number of active spaces in MOSpaces must be equal '
+                             f'to the number of active spaces in MCSpace: {self.n_active} != {self.mcspace.n_act_mo}')
+
         offsets = [0]
         for n_o in self.spaces[:-1]:
             offsets.append(offsets[-1] + n_o)
         self.offsets = tuple(offsets)
 
     @property
-    def frozen_core_space(self) -> slice:
+    def frozen_core(self) -> slice:
         return np.s_[0:self.offsets[1]]
 
     @property
-    def inactive_space(self) -> slice:
+    def frozen_core_2d(self) -> tuple[slice, ...]:
+        return np.s_[0:self.offsets[1], 0:self.offsets[1]]
+
+    @property
+    def inactive(self) -> slice:
         return np.s_[self.offsets[1]:self.offsets[2]]
 
     @property
-    def active_space(self) -> slice:
+    def inactive_2d(self) -> tuple[slice, ...]:
+        return np.s_[self.offsets[1]:self.offsets[2], self.offsets[1]:self.offsets[2]]
+
+    @property
+    def active(self) -> slice:
         return np.s_[self.offsets[2]:self.offsets[3]]
 
     @property
-    def secondary_space(self) -> slice:
+    def active_2d(self) -> tuple[slice, ...]:
+        return np.s_[self.offsets[2]:self.offsets[3], self.offsets[2]:self.offsets[3]]
+
+    @property
+    def secondary(self) -> slice:
         return np.s_[self.offsets[3]:self.offsets[4]]
 
     @property
-    def frozen_virtual_space(self) -> slice:
+    def secondary_2d(self) -> tuple[slice, ...]:
+        return np.s_[self.offsets[3]:self.offsets[4], self.offsets[3]:self.offsets[4]]
+
+    @property
+    def frozen_virtual(self) -> slice:
         return np.s_[self.offsets[4]:self.offsets[5]]
+
+    @property
+    def frozen_virtual_2d(self) -> tuple[slice, ...]:
+        return np.s_[self.offsets[4]:self.offsets[5], self.offsets[4]:self.offsets[5]]
 
     @property
     def n_frozen_core(self) -> int:
@@ -87,7 +121,7 @@ class MOSpaces:
         return self.spaces[2]
 
     @property
-    def secondary(self) -> int:
+    def n_secondary(self) -> int:
         return self.n_virtual + self.n_frozen_virtual
 
     @property
@@ -151,11 +185,12 @@ class MCSpace:
 
     CONFIG_CLASS_COL = 'config_class'
 
-    def __init__(self, graph: RASGraph, /, df: pd.DataFrame | None = None, *,
+    def __init__(self, graph: RASGraph, /,
+                 df: pd.DataFrame | None = None, *,
                  mo_blocks: RawMOBlocks | None = None,
                  config_classes: ConfigClasses | None = None):
         self.graph = graph
-        self.df = df if df else None
+        self.df = df
 
         if df is None and mo_blocks is not None:
             self.set_mo_blocks(mo_blocks)
@@ -507,21 +542,30 @@ class MCSpace:
 
     @classmethod
     def from_dict(cls, data: ParsingResult, /,
-                  active_spaces_key='active_spaces',
-                  active_elec_key='elec_act',
-                  max_hole_key='max_hole',
-                  max_elec_key='max_elec',
+                  active_spaces_key: str = 'active_spaces',
+                  active_elec_key: str = 'elec_act',
+                  max_hole_key: str = 'max_hole',
+                  max_elec_key: str = 'max_elec',
+                  instance_key: str = 'space',
                   **kwargs) -> 'MCSpace':
-        data.update(kwargs)
+        if isinstance(instance := data.get(instance_key, None), cls):
+            return instance
+        elif isinstance(instance, dict):
+            instance = cls.from_dict(instance, **kwargs)
+        elif instance is None:
+            data.update(kwargs)
 
-        return cls.from_space_spec(
-            data.pop(active_spaces_key),
-            data.pop(active_elec_key),
-            data.pop(max_hole_key), data.pop(max_elec_key),
-            mo_blocks=data.pop('mo_blocks', None),
-            config_classes=data.pop('config_classes', None),
-            use_python_int=data.pop('use_python_int', None),
-        )
+            instance = data.setdefault(
+                instance_key, cls.from_space_spec(
+                    data.pop(active_spaces_key),
+                    data.pop(active_elec_key),
+                    data.pop(max_hole_key), data.pop(max_elec_key),
+                    mo_blocks=data.pop('mo_blocks', None),
+                    config_classes=data.pop('config_classes', None),
+                    use_python_int=data.pop('use_python_int', None),
+                )
+            )
+        return instance
 
     @classmethod
     def from_space_spec(cls, ras: RASMOs | tuple[int, int, int] | list[int] | int,

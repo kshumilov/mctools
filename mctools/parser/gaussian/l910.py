@@ -36,8 +36,8 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    'l910_parser_funcs_general',
-    'l910_parser_funcs_rdms',
+    'l910_parser_funcs_fast',
+    'l910_parser_funcs_all',
 
     'read_rdms',
     'read_mc_spec',
@@ -208,7 +208,7 @@ def read_rdms(file: TextIO, n_states: int, n_mo_act: int, /, first_line: str = '
 
     return {
         'rdms': rdms,
-        'rdm_diags': np.diagonal(rdms, axis1=1, axis2=2)
+        'rdm_diags': np.abs(np.diagonal(rdms, axis1=1, axis2=2))
     }, line
 
 
@@ -231,10 +231,11 @@ tdm_start_patt = ProcessedPattern(
 
 def read_oscillator_strength(file: TextIO, n_states: int, n_ground: int, /, *,
                              first_line: str = '') -> tuple[ParsingResult, str]:
-    _, line = search_in_file(file, tdm_start_patt.pattern, first_line=first_line, err_msg='No Oscillator information is found')
+    _, line = search_in_file(file, tdm_start_patt.pattern, first_line=first_line,
+                             err_msg='No Oscillator information is found')
 
     n_pairs = n_ground * (2 * n_states - n_ground - 1) // 2
-    osc_info, line = findall_in_file(file, osc_patt, max_matches=n_pairs, max_skips=3, first_line=line)
+    osc_info, line = findall_in_file(file, osc_patt, max_matches=n_pairs, max_skips=-1, first_line=line)
 
     initial_state: list[int] = []
     final_state: list[int] = []
@@ -280,7 +281,7 @@ def read_tdms(file: TextIO, /, *, first_line: str = '') -> tuple[ParsingResult, 
         MCPeaks.INITIAL_STATE_COL: initial_state,
         MCPeaks.FINAL_STATE_COL: final_state,
         MCPeaks.OSC_COL: osc_strength,
-        'resource_idx': np.arange(len(tdms))
+        MCPeaks.RESOURCE_COL: np.arange(len(tdms))
     })
     return dict(df_peaks=df, tdms=np.stack(list(tdms.values()))), line
 
@@ -301,7 +302,7 @@ spin_patt = re.compile(
 # TODO: include Spin Parsing
 
 
-l910_parser_funcs_general: dict[str, list[Callable]] = {
+l910_parser_funcs_fast: dict[str, list[Callable]] = {
     'l910': [
         read_mc_spec,
         read_ci_vecs,
@@ -310,11 +311,11 @@ l910_parser_funcs_general: dict[str, list[Callable]] = {
     ],
 }
 
-l910_parser_funcs_rdms: dict[str, list[Callable]] = {
+l910_parser_funcs_all: dict[str, list[Callable]] = {
     'l910': [
         read_mc_spec,
         read_ci_vecs,
         read_rdms,
-        read_oscillator_strength,
+        read_tdms,
     ],
 }

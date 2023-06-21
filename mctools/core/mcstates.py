@@ -12,14 +12,13 @@ from scipy import sparse
 
 from .base import Consolidator
 from .constants import Eh2eV
-
+from .mcspace import MCSpace
 
 if TYPE_CHECKING:
-    from .base import Selector
     from .mcpeaks import MCPeaks
-    from .mcspace import MCSpace, ConfigTransform
+    from .base import Selector
+    from .mcspace import ConfigTransform
     from ..parser.lib import ParsingResult
-
 
 __all__ = [
     'MCStates',
@@ -74,15 +73,14 @@ class MCStates(Consolidator):
     ci_vecs: sparse.csr_array | sparse.lil_array  # Sparse array of CI vectors
     rdm_diags: np.ndarray
 
-    mcspace: MCSpace | None
-    peaks: MCPeaks | None
+    # mcspace: MCSpace | None
+    # peaks: MCPeaks | None
 
     # Used for implicit sorting of rdm_diag and ci_vec
     # Move to df
     _state_map: np.ndarray
 
-    def __init__(self,
-                 df: pd.DataFrame,
+    def __init__(self, df: pd.DataFrame,
                  ci_vecs: sparse.csr_array | sparse.lil_array | sparse.coo_array,
                  rdm_diags: np.ndarray, /,
                  source: str = '',
@@ -103,7 +101,7 @@ class MCStates(Consolidator):
 
         self.mcspace = mcspace
         self._state_map = np.arange(len(self))
-        self.peaks = None
+        self.peaks: MCPeaks | None = None
         # self.df['resource_idx'] = self._state_map
 
         if sort:
@@ -325,7 +323,8 @@ class MCStates(Consolidator):
 
         idx = self.filter(idx=idx, condition=condition)
 
-        config_class = self._df.loc[self._df.index[idx], self.mcspace.config_classes.keys()].idxmax(axis=1)
+        config_columns = list(self.property_columns & self.mcspace.config_classes.keys())
+        config_class = self._df.loc[self._df.index[idx], config_columns].idxmax(axis=1).values
 
         df = pd.DataFrame({col_name: config_class})
 
@@ -524,10 +523,9 @@ class MCStates(Consolidator):
             self.ci_vecs[self._state_map[key]],
             self.rdm_diags[self._state_map[key]],
             mcspace=self.mcspace,
-            spaces=self.spaces,
         )
 
-        if self.are_peaks_set:
+        if False and self.are_peaks_set:
             warnings.warn('Slicing MCStates with peaks assigned is not tested')
 
             preserve_key = new_df.index.values
@@ -639,7 +637,8 @@ class MCStates(Consolidator):
         df_rdm = self._df.loc[idx, mo_block_labels].apply(
             lambda r: ' + '.join([f'{l}({v:>5.2f})' for l, v in r.items()]), axis=1)
 
-        config_class_labels = [c for c in self.mcspace.config_class_labels if c in self._df] if include_config_class else []
+        config_class_labels = [c for c in self.mcspace.config_class_labels if
+                               c in self._df] if include_config_class else []
         df_config_class = self._df.loc[idx, config_class_labels].apply(
             lambda r: ' + '.join([f'{l}({v:7.3%})' for l, v in r.items()]), axis=1)
 
@@ -691,33 +690,43 @@ class MCStates(Consolidator):
                   df_key: str = 'df_states',
                   ci_vecs_key: str = 'ci_vecs',
                   rdm_diags_key: str = 'rdm_diags',
-                  mcspace_key: str = 'mcspace',
                   source_key: str = 'source',
+                  instance_key: str = 'states',
                   **kwargs) -> 'MCStates':
-        data.update(kwargs)
+        if isinstance(instance := data.get(instance_key, None), cls):
+            return instance
+        elif isinstance(instance, dict):
+            instance = cls.from_dict(instance, **kwargs)
+        elif instance is None:
+            data.update(kwargs)
 
-        df: pd.DataFrame = data.pop(df_key)
-        ci_vecs: sparse.coo_array = data.pop(ci_vecs_key)
-        rdm_diags: npt.NDArray = data.pop(rdm_diags_key)
+            df: pd.DataFrame = data.pop(df_key)
+            ci_vecs: sparse.coo_array = data.pop(ci_vecs_key)
+            rdm_diags: npt.NDArray = data.pop(rdm_diags_key)
 
-        space: MCSpace | None = data.pop(mcspace_key, None)
-        if isinstance(space, dict):
-            from .mcspace import MCSpace
-            space = MCSpace.from_dict(space)
+            try:
+                space = MCSpace.from_dict(data)
+            except (KeyError, ValueError) as exc:
+                warnings.warn(f'{MCSpace.__name__} is not found expect reduced '
+                              f'functionality: {exc.args}', RuntimeWarning)
+                space = None
 
-        states: MCStates = cls(
-            df, ci_vecs, rdm_diags,
-            source=data.get(source_key, ''), mcspace=space,
-            sort=kwargs.get('sort_states', False)
-        )
+            instance = data.setdefault(instance_key,
+                                       cls(df, ci_vecs, rdm_diags,
+                                           source=data.get(source_key, ''),
+                                           mcspace=space,
+                                           sort=kwargs.get('sort_states', False)))
+            try:
+                from .mcpeaks import MCPeaks
 
-        try:
-            from .mcpeaks import MCPeaks
-            states.peaks = MCPeaks.from_dict(data, states=states, states_key='states')
-        except KeyError:
-            pass
+                instance.peaks = MCPeaks.from_dict(data, states_key=instance_key, **kwargs)
+            except KeyError:
+                pass
+        else:
+            raise ValueError(f"{cls.__name__} did not recognized '{instance_key}' "
+                             f"item in data: {instance}")
 
-        return states
+        return instance
 
     def validate_df(self: 'MCStates', new_df: pd.DataFrame) -> pd.DataFrame:
         new_df = super(MCStates, self).validate_df(new_df)
