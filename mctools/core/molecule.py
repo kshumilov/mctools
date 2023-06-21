@@ -1,17 +1,24 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NoReturn, TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+
+from .base import Consolidator, Selector
+
+
+if TYPE_CHECKING:
+    from ..parser.lib import ParsingResult
+
 
 __all__ = [
     "Molecule",
 ]
 
 
-class Molecule:
+class Molecule(Consolidator):
     """Class to hold basic information about the molecule
 
     Attributes:
@@ -23,13 +30,8 @@ class Molecule:
         source: str --- filename of the origin
     """
     __slots__ = [
-        "_df",
         "charge", "multiplicity",
-        "name", "source",
     ]
-
-    ## Columns definitions
-    SOURCE_COL = 'source'
 
     # Cartesian Coordinates
     X_COL = 'x'
@@ -38,30 +40,30 @@ class Molecule:
     COORDS_COLS = [X_COL, Y_COL, Z_COL]
 
     # Atom properties
+    ATOM_COL = 'atom'
     ATOMIC_NUMBER_COL = 'Z'
 
-    DEFAULT_COLS = [*COORDS_COLS, ATOMIC_NUMBER_COL]
+    SOURCE_COL = 'atom_source'
+    IDX_COLS = [ATOM_COL, SOURCE_COL]
+    DEFAULT_COLS = [*IDX_COLS, *COORDS_COLS, ATOMIC_NUMBER_COL]
 
     _df: pd.DataFrame  # Table that hold properties of atoms in the molecule
     name: str | None
 
-    def __init__(self, molecule: pd.DataFrame, /,
-                 charge: int = 0, multiplicity: int = 1, *,
-                 name: str | None = None, source: str | None = None):
-        for col in self.DEFAULT_COLS:
-            if col not in molecule:
-                raise ValueError(f"'molecule' DataFrame must contain {col} column.")
-
-        self._df = molecule.copy(deep=True)
+    def __init__(self, df: pd.DataFrame, /,
+                 source: str | None = None,
+                 charge: int = 0,
+                 multiplicity: int = 1):
+        super(Molecule, self).__init__(df, source=source, sort=False)
         self.charge = charge
-        self.multiplicity = multiplicity
-        
-        self.name = name
-        self.source = source
+        if charge > self.Z.sum():
+            raise ValueError('Cannot ionize more electrons then given in atoms')
 
-    @property
-    def df(self: 'Molecule') -> pd.DataFrame:
-        return self.df.copy(deep=True)
+        self.multiplicity = multiplicity
+
+    def analyze(self: 'Consolidator', idx: npt.ArrayLike | None = None, condition: Selector | None = None,
+                save=True, replace=False) -> pd.DataFrame | None:
+        pass
 
     @property
     def coords(self: 'Molecule') -> npt.NDArray[np.float_]:
@@ -76,34 +78,58 @@ class Molecule:
         return self.Z.sum() - self.charge
     
     @classmethod
-    def from_dict(cls, data: dict[str, Any], /,
-                  coords_key: str = 'coords',
-                  atomic_number_key: str = 'Z',
+    def from_dict(cls, data: ParsingResult, /,
+                  df_key: str = 'df_molecule',
                   charge_key: str = 'charge',
                   multiplicity_key: str = 'multiplicity',
                   source_key: str = 'source',
-                  name_key: str = 'title', **kwargs) -> 'Molecule':
-        data.update(kwargs)
+                  instance_key: str = 'molecule',
+                  **kwargs) -> 'Molecule':
+        if isinstance(instance := data.get(instance_key, None), cls):
+            return instance
+        elif isinstance(instance, dict):
+            instance = cls.from_dict(instance, **kwargs)
+        elif instance is None:
+            data.update(kwargs)
 
-        args: list[Any] = []
+            df = data.pop(df_key)
+            source = data.get(source_key, '')
 
-        df = pd.DataFrame()
-        df[cls.COORDS_COLS] = data.pop(coords_key)
-        df[cls.ATOMIC_NUMBER_COL] = data.pop(atomic_number_key)
-        args.append(df)
+            args: list[Any] = []
+            if charge := data.pop(charge_key, None):
+                args.append(charge)
 
-        if charge_key in data:
-            args.append(data.pop(charge_key))
+            if multiplicity_key := data.pop(multiplicity_key, None):
+                args.append(multiplicity_key)
 
-        if multiplicity_key in data:
-            args.append(data.pop(multiplicity_key))
+            instance = data.setdefault('molecule',
+                                       cls(df, source, *args))
+        else:
+            raise ValueError(f"{cls.__name__} did not recognized '{instance_key}' "
+                             f"item in data: {instance}")
+        return instance
 
-        return cls(*args, name=data.pop(name_key), source=data.pop(source_key))
+    def validate_df(self: 'Molecule', new_df: pd.DataFrame) -> pd.DataFrame:
+        if self.ATOM_COL not in new_df:
+            new_df[self.ATOM_COL] = np.arange(len(new_df)) + 1
+
+        return super(Molecule, self).validate_df(new_df)
+
+    def to_xyz(self: 'Molecule', filename: str) -> NoReturn:
+        lines = ['%4.d' % len(self), '']
+        for idx, atom in self.df.iterrows():
+            line = ['%4.d' % atom.Z]
+            line.extend(['%16.8E' % v for v in atom[self.COORDS_COLS]])
+            lines.append((' ' * 4).join(line))
+
+        with open(filename, 'w') as file:
+            file.write('\n'.join(lines))
 
     def __len__(self) -> int:
         return len(self._df)
 
     def __repr__(self) -> str:
+        name = ''
         return f"{self.__class__.__name__}" \
-               f"({self.name}, #atoms={len(self)}, source='{self.source}')"
+               f"({name}, #atoms={len(self)})"
     
