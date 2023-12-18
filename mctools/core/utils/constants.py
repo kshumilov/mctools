@@ -11,7 +11,7 @@ __all__ = [
     'g_e', 'alpha',
 
     'Eh2eV', 'eV2Eh', 'wn2eV',
-    'sigma_0', 'sigma_x', 'sigma_y', 'sigma_z', 'sigma_vector',
+    'sigma_0', 'sigma_x', 'sigma_y', 'sigma_z', 'sigma_vector', 'pauli_vector',
 
     'PeriodicTable',
 
@@ -35,5 +35,6 @@ sigma_z = np.asarray([[1, 0], [0, -1]])
 sigma_x = np.asarray([[0, 1], [1,  0]])
 sigma_y = 1j * np.asarray([[0, -1], [1,  0]])
 sigma_vector = np.stack([sigma_x, sigma_y, sigma_z])
+pauli_vector = np.stack([sigma_0, sigma_x, sigma_y, sigma_z])
 
 ANGULAR_MOMENTUM_SYMBS = np.asarray(['S', 'P', 'D', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'])

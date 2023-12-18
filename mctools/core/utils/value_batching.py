@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-
 import heapq
 
-from typing import NamedTuple, NoReturn
+from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
-
 
 __all__ = [
     'Batch',
@@ -22,12 +20,14 @@ __all__ = [
 ]
 
 
-class Batch(NamedTuple):
+@dataclass
+class Batch:
     n: int  # Number of values in the batch
     lb: float  # Lower bound of the batch, such that ∀v, v >= lb
     ub: float  # Upper bound of the batch, such that ∀v, v <  ub
-    gap: float  #
+    gap: float  # Distance between highest state of this batch and lowest state of next batch
 
+    @property
     def width(self) -> float:
         return self.ub - self.lb
 
@@ -41,7 +41,7 @@ class Batch(NamedTuple):
         return (self.lb <= energy) & (energy < self.ub)
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(n={self.n:>5d}, bounds=({self.lb:>11.5f},{self.ub:>11.5f}), gap={self.gap:>11.5f})"
+        return f"{self.__class__.__name__}(n={self.n:>5d}, lb={self.lb:>11.5f}, width={self.width:>11.5f}, gap={self.gap:>11.5f})"
 
 
 LB = np.s_[:-1, np.newaxis]
@@ -51,7 +51,7 @@ UB = np.s_[1:, np.newaxis]
 def batch_values(values: npt.ArrayLike, min_diff, /, n_batch_start: int = 0, max_batch_size: int = 96,
                  max_iter: int = 1):
     if n_batch_start < 0:
-        raise ValueError(f'Number of start batches must be non-negative: {n_batch_start} < 0')
+        raise ValueError(f'Number of start batches must be non-negative: n_batch_start = {n_batch_start} < 0')
 
     values = np.asarray(values)
 
@@ -99,8 +99,11 @@ def batch_values(values: npt.ArrayLike, min_diff, /, n_batch_start: int = 0, max
     return n, bounds, gaps
 
 
-def split_batch(batch: Batch, idx: int, values: npt.ArrayLike) -> tuple[Batch, Batch]:
+def split_batch(batch: Batch, values: npt.ArrayLike, idx: int | None = None) -> tuple[Batch, Batch]:
     v = values[batch.get_idx(values)]
+
+    if idx is None:
+        idx = np.diff(v).argmax()
 
     mb = (v[idx + 1] + v[idx]) / 2
     gap = (v[idx + 1] - v[idx]) / 2
@@ -113,8 +116,8 @@ def split_batch(batch: Batch, idx: int, values: npt.ArrayLike) -> tuple[Batch, B
     return b_l, b_u
 
 
-def split_batches(batches: list[Batch], values: npt.ArrayLike, max_batch_size: int = 96, min_gap: float = 0.0005) -> \
-list[Batch]:
+def split_batches(batches: list[Batch], values: npt.ArrayLike,
+                  max_batch_size: int = 96, min_gap: float = 0.0005) -> list[Batch]:
     excluded = []
 
     values = np.asarray(values)
@@ -131,7 +134,7 @@ list[Batch]:
             excluded.append(batch)
             continue
 
-        b_l, b_u = split_batch(batch, i, v)
+        b_l, b_u = split_batch(batch, v, idx=i)
         heapq.heappush(heap, (-b_l.n, b_l))
         heapq.heappush(heap, (-b_u.n, b_u))
 
@@ -180,7 +183,7 @@ def construct_from_arrays(n, bounds, gaps, fmt='dict') -> dict[int, Batch] | lis
     return batches
 
 
-def print_batches(batches: dict[int, Batch] | list[Batch]) -> NoReturn:
+def print_batches(batches: dict[int, Batch] | list[Batch]) -> None:
     if isinstance(batches, dict):
         n = sum(b.n for b in batches.values())
         iter = batches.items()

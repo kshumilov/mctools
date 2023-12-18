@@ -112,7 +112,7 @@ def read_mc_spec(file: TextIO, /, *, first_line: str = '') -> tuple[ParsingResul
     active_spaces, line = search_in_file(file, mc_patt, first_line=line)
     mc_spec.update({'active_spaces': active_spaces, 'n_mo_act': sum(active_spaces)})
 
-    mc_spec['mo_spaces'], line = search_in_file(file, ci_spaces_patt, first_line=line)
+    mc_spec['ci_spaces'], line = search_in_file(file, ci_spaces_patt, first_line=line)
 
     match, line = search_in_file(file, sa_start_patt, first_line=line, n_skips=1)
     if match is not None:

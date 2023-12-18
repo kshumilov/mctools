@@ -57,6 +57,10 @@ class SimpleGraph:
 
     def __init__(self, n_orb: int, n_elec: int, /, nodes: npt.NDArray[np.uint64] | None = None, *,
                  reverse: bool = False, use_python_int: bool = False):
+        # addr_dtype = np.min_scalar_type(g.n_configs)
+        # config_dtype = np.min_scalar_type(1 << n_orb)
+        # orb_idx_dtype = np.min_scalar_type(n_orb)
+
         if use_python_int:
             warnings.warn('Using python int as config data type, expect slow performance', RuntimeWarning)
 
@@ -226,7 +230,7 @@ class SimpleGraph:
         # return (self.config_dtype.type(1) << self.config_dtype.type(self.n_orb)) - self.config_dtype.type(1)
 
     def get_graph_spec(self) -> str:
-        return f'[{self.n_elec:>2d}e, {self.n_orb:>2d}o]'
+        return f'[{self.n_orb:>2d}o, {self.n_elec:>2d}e]'
 
     def __repr__(self) -> str:
         spec = self.get_graph_spec()
@@ -487,6 +491,10 @@ class RASGraph:
         return sum(self.elec)
 
     @property
+    def n_orb(self) -> int:
+        return sum(self.spaces)
+
+    @property
     def n_cat(self) -> int:
         return len(self.categories)
 
@@ -513,7 +521,7 @@ class RASGraph:
         else:
             restrictions = [-self.max_hole, 0, self.max_elec]
             spec = ','. join([f'{r:>-2d}/{mo:>2d}' for r, mo in zip(restrictions, self.spaces)])
-        return f'{self.n_elec}e|{spec}'
+        return f'{self.n_elec}e{self.n_orb}o|{spec}'
 
     def __repr__(self) -> str:
         ras_spec = self.get_graph_spec()

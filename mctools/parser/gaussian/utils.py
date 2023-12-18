@@ -127,4 +127,5 @@ def parse_gdvlog(filename: str, links: dict[str, list[Callable]], /,
                                     postprocessors=postprocess_links.get(link, None),
                                     first_line=line)
             result.update(data)
+        print()
     return result

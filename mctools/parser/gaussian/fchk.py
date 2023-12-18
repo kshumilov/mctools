@@ -209,7 +209,7 @@ def read_mo_coefficients(file: TextIO, n_ao: int, /,
             molorb = molorb_raw_a.reshape(-1, n_ao)
         case 'U':
             molorb_raw_b, line = read_fchk_array(file, 'Beta MO coefficients', first_line=line)
-            molorb = np.zeros((n_ao, n_ao), dtype=np.float_)
+            molorb = np.zeros((n_ao * 2, n_ao * 2), dtype=np.float_)
             molorb[0::2, 0::2] = molorb_raw_a.reshape(-1, n_ao)
             molorb[1::2, 1::2] = molorb_raw_b.reshape(-1, n_ao)
         case 'G':

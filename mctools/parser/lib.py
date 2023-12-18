@@ -231,12 +231,14 @@ def findall_in_file(file: TextIO, patt: str | re.Pattern | ProcessedPattern, /,
     return results, line
 
 
-def parse_calc_name(filename: str, patterns: list[re.Pattern | ProcessedPattern], /) -> dict[str, int | float | str]:
-    info = {}
-    for patt in patterns:
-        matches = patt.findall(filename)
-        info.update(matches.pop())
-    return info
+def parse_calc_name(filename: str, *patterns: re.Pattern | ProcessedPattern) -> tuple[list[bool], ParsingResult]:
+    result: ParsingResult = {}
+    matched: list[bool] = [False] * len(patterns)
+    for i, pattern in enumerate(patterns):
+        if matches := pattern.findall(filename):
+            result.update(matches.pop())
+            matched[i] = True
+    return matched, result
 
 
 def parse_file(file: TextIO, read_funcs: list[Callable], /, result: ParsingResult, *, first_line: str = ''):

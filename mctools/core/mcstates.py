@@ -443,12 +443,10 @@ class MCStates(Consolidator):
             self.reset_index()
 
     def update_space(self, new_space: MCSpace, transform: ConfigTransform | None = None) -> NoReturn:
-        if transform is not None:
-            addr_map = self.get_addr_map(new_space, transform)
-
-            # Update addresses
-            self.ci_vecs.resize(len(self), new_space.n_configs)
-            self.ci_vecs.indices = addr_map.get(self.ci_vecs.indices).values
+        # Update addresses
+        addr_map = self.get_addr_map(new_space, transform)
+        self.ci_vecs.resize(len(self), new_space.n_configs)
+        self.ci_vecs.indices = addr_map.get(self.ci_vecs.indices).values.astype(self.ci_vecs.indices.dtype)
 
         # Remove old config label classes
         cols = [label for label in self.mcspace.config_class_labels if label in self._df]
@@ -457,12 +455,14 @@ class MCStates(Consolidator):
         # Update the space
         self.mcspace = new_space
 
-    def get_addr_map(self, new_space: MCSpace, transform: ConfigTransform | None) -> pd.Series:
+    def get_addr_map(self, new_space: MCSpace, transform: ConfigTransform | None = None) -> pd.Series:
         addrs = np.unique(self.ci_vecs.indices)
 
         # Update configs
         configs = self.mcspace.graph.get_config(addrs)
-        transform(configs)
+        if transform is not None:
+            transform(configs)
+
         new_addrs = new_space.graph.get_address(configs)
         return pd.Series(new_addrs, addrs)
 

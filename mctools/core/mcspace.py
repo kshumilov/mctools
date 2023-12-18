@@ -596,7 +596,7 @@ class MCSpace:
 
     def __repr__(self) -> str:
         ras_spec = self.graph.get_graph_spec()
-        return f'{self.__class__.__name__}([{ras_spec}])'
+        return f'{self.__class__.__name__}([{ras_spec}], #Det={self.n_configs:,d}, #Cat={self.graph.n_cat:,d})'
 
     def __eq__(self, other: 'MCSpace') -> bool:
         return self.graph == other.graph  # and self.df.equals(other.df)

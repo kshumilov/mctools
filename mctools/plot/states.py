@@ -1,6 +1,7 @@
 from typing import Sequence
 
 import numpy as np
+import numpy.typing as npt
 import matplotlib.pyplot as plt
 
 from ..core import MCStates
@@ -11,19 +12,25 @@ __all__ = [
 ]
 
 
-def prepare_state_centers(states: MCStates, /,
-                          center: float = 0., *,
-                          max_col_width: float = 1.,
-                          degeneracy_col: str = MCStates.DEGENERACY_COL) -> np.ndarray:
-    E = states.E
-    g = states.df[degeneracy_col]
+def prepare_state_centers(energy: npt.ArrayLike, degeneracy: npt.ArrayLike, /,
+                          column_center: float = 0., *,
+                          max_col_width: float = 1.) -> np.ndarray:
+    energy = np.asarray(energy)
+    degeneracy = np.asarray(degeneracy)
 
-    x_c = np.zeros_like(E) + (center - max_col_width / 2)
-    for d, n in zip(*np.unique(g, return_counts=True)):
+    if energy.shape != degeneracy.shape:
+        raise ValueError(
+            f"'energy' and 'degeneracy' arrays must have the same shape: {energy.shape} != {degeneracy.shape}")
+
+    if energy.ndim != 1:
+        raise ValueError(f"'energy' and 'degeneracy' arrays must be one dimensional: {energy.ndim} != 1")
+
+    state_center = np.zeros_like(energy) + (column_center - max_col_width / 2)
+    for d, n in zip(*np.unique(degeneracy, return_counts=True)):
         l = max_col_width / n
         j = 2 * np.arange(n) + 1
-        x_c[(g == d)] += j * l / 2
-    return x_c
+        state_center[(degeneracy == d)] += j * l / 2
+    return state_center
 
 
 def plot_state_levels(
@@ -32,15 +39,15 @@ def plot_state_levels(
         data: MCStates | Sequence[MCStates],
         energy_col: str = MCStates.RELATIVE_ENERGY_COL,
         degeneracy_col: str = MCStates.DEGENERACY_COL,
+        state_label_col: str = MCStates.DOMINANT_CONFIG_COL,
+
+        state_labels: dict[str, str] | None = None,
+        xlabels: Sequence[str] | None = None,
 
         title: str | None = None,
         xlabel: str = 'Structure',
         ylabel: str = r'$E-E_0$',
         legend_title: str = 'States',
-
-        state_labels: dict[str, str] | None = None,
-        xlabels: Sequence[str] | None = None,
-        state_label_col: str = MCStates.DOMINANT_CONFIG_COL,
 
         center_scale: float = 1.,
         column_width: float = 1.,
@@ -55,12 +62,12 @@ def plot_state_levels(
     state_labels = state_labels if state_labels else {}
 
     xticks = []
-    for center, states in enumerate(data):
-        center *= center_scale
-        x_c = prepare_state_centers(states, center=center,
-                                    max_col_width=column_width,
-                                    degeneracy_col=degeneracy_col)
-        xticks.append(center)
+    for center_idx, states in enumerate(data):
+        center_idx *= center_scale
+        state_centers = prepare_state_centers(states.df[energy_col], states.df[degeneracy_col],
+                                              column_center=center_idx,
+                                              max_col_width=column_width)
+        xticks.append(center_idx)
 
         if MCStates.DOMINANT_CONFIG_COL in states.property_columns:
             iterator = states.df.groupby(state_label_col)
@@ -69,11 +76,11 @@ def plot_state_levels(
 
         for i, (label, df) in enumerate(iterator):
             E = df[energy_col]
-            level_end = x_c[df.index.values] + (level_width / 2)
-            level_start = x_c[df.index.values] - (level_width / 2)
+            state_end = state_centers[df.index.values] + (level_width / 2)
+            state_start = state_centers[df.index.values] - (level_width / 2)
 
-            label = state_labels.get(label, label) if center == 0 else None
-            ax.hlines(E, level_start, level_end, label=label,
+            label = state_labels.get(label, label) if center_idx == 0 else None
+            ax.hlines(E, state_start, state_end, label=label,
                       color=f'C{i}', lw=level_thickness)
 
     xticks = np.asarray(xticks)

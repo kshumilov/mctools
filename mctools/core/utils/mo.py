@@ -52,10 +52,10 @@ def partition_molorb(molorb: np.ndarray, df_ao: pd.DataFrame, overlap: np.ndarra
 
     for prop_name in by:
         prop = df_ao[prop_name]
-        values = prop.unique()
-        values.sort()
+        uniques = prop.unique()
+        uniques.sort()
 
-        partition: np.ndarray = np.tile(values[:, np.newaxis], n_ao) == prop.values
+        partition: np.ndarray = np.tile(uniques[:, np.newaxis], n_ao) == prop.values
         partitions.append(partition)
 
     C_inv = overlap @ molorb.T.conj()  # (#AOs, #MOs)
@@ -84,13 +84,17 @@ def partorb_to_df(partorb: np.ndarray, df_ao: pd.DataFrame, by: list[str] | None
             l = df_ao[column].unique()
             l.sort()
             indices.append(ANGULAR_MOMENTUM_SYMBS[l])
-        elif column == 'atom':
-            atm = df_ao[column].unique()
-            indices.append(atm + 1)
+        elif column == 'atom' and 'element' in df_ao:
+            atm_el = df_ao[['atom', 'element']].drop_duplicates()
+            indices.append([f'{PT.Symbol[t.element - 1]}{t.atom + 1}' for t in atm_el.itertuples()])
         elif column == 'element':
             Z = df_ao[column].unique()
             Z.sort()
             indices.append(PT.Symbol[Z - 1])
+        elif column in df_ao:
+            values = df_ao[column].unique()
+            values.sort()
+            indices.append(values)
         else:
             raise ValueError(f'Cannot partition by column: {column}')
 
