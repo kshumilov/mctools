@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import warnings
+from enum import StrEnum, auto
 from typing import TYPE_CHECKING, ClassVar, Type, NoReturn
 
 import numpy as np
@@ -11,8 +12,7 @@ from .molecule import Molecule
 from .utils.mo import partition_molorb, partorb_to_df
 
 if TYPE_CHECKING:
-    from ..parser.lib import ParsingResult
-
+    from parsing.core.pattern import ParsingResultType
 
 __all__ = [
     'transform_integral',
@@ -26,7 +26,12 @@ def transform_integral(integral: npt.NDArray, transformation: npt.NDArray) -> np
 
 
 class Basis:
-    IntegralCollection: ClassVar[Type] = dict[str, npt.NDArray]
+    class Integrals(StrEnum):
+        overlap = 'overlap'
+        kinetic = 'kinetic'
+        potential = 'potential'
+
+    IntegralCollection: ClassVar[Type] = dict[Integrals, npt.NDArray]
 
     VALID_WF_REFS: ClassVar[list[str]] = ['R', 'U', 'G', 'RO', 'CR']
     INT_AO_DIMS = np.s_[-2:]
@@ -95,7 +100,7 @@ class Basis:
                                  f"{integral.shape} != (..., {self.n_ao}, {self.n_ao})")
             self._integrals[name] = integral
 
-    def get_integral(self, name: str, apply_restriction: bool = True, spin_blocked: bool = False) -> npt.NDArray:
+    def get_integral(self, name: 'Basis.Integrals', apply_restriction: bool = True, spin_blocked: bool = False) -> npt.NDArray:
         if (integral := self._integrals.get(name)) is not None:
             if apply_restriction:
                 match self.restriction:
@@ -123,7 +128,7 @@ class Basis:
                                               f'restriction is not implemented.')
         return self.df.copy(deep=True)
 
-    def partition_molorb(self, molorb: npt.NDArray, /, overlap_key: str = 'overlap', spin_blocked: bool = False,
+    def partition_molorb(self, molorb: npt.NDArray, /, overlap_key: Integrals = Integrals.overlap, spin_blocked: bool = False,
                          to_df: bool = True, **kwargs) -> npt.NDArray | pd.DataFrame:
         if molorb.shape[self.MO_AO_DIM] != (self.n_ao * self.n_comp):
             raise ValueError(f'#AOs in C_MO[#MOs, #AOs] does not '
@@ -141,10 +146,10 @@ class Basis:
         return partorb
 
     @classmethod
-    def from_dict(cls, data: ParsingResult, /,
+    def from_dict(cls, data: ParsingResultType, /,
                   df_key: str = 'df_ao',
                   restriction_key: str = 'restriction',
-                  integral_keys: list[str] | None = None,
+                  integrals_key: str | list[str] = 'integrals',
                   skip_missing: bool = False,
                   instance_key: str = 'basis',
                   **kwargs):
@@ -166,12 +171,15 @@ class Basis:
                 molecule = None
 
             integrals: cls.IntegralCollection = {}
-            integral_keys = integral_keys if integral_keys else []
-            for key in integral_keys:
-                if (integral := data.pop(key, None)) is not None:
-                    integrals[key] = integral
-                elif not skip_missing:
-                    raise KeyError(f"Integral '{key}' is not in 'data': {list(data.keys())}")
+            match integrals_key:
+                case str(integrals_key):
+                    integrals = data.pop(integrals_key, None)
+                case [*integral_keys]:
+                    for key in integral_keys:
+                        if (integral := data.pop(key, None)) is not None:
+                            integrals[key] = integral
+                        elif not skip_missing:
+                            raise KeyError(f"Integral '{key}' is not in 'data': {list(data.keys())}")
 
             instance = data.setdefault(instance_key, cls(df, restriction, molecule, integrals=integrals))
         else:

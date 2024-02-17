@@ -6,21 +6,19 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from .mcspace import MCSpace, MOSpaces
+from .mcspace import MCSpace, MOSpacePartition
 from .base import Consolidator, Selector
 from .mcstates import MCStates
 from .utils.constants import Eh2eV
 
 
-# from .utils import get_state_alignment, get_state_map_from_alignment, StateAlignment
-
 __all__ = [
-    'MCPeaks',
+    'MCTransitions',
 ]
 
 
-class MCPeaks(Consolidator):
-    """Holds information about multiconfigurational peaks.
+class MCTransitions(Consolidator):
+    """Holds information about MCState overlaps: <I|Op|J> where, I and J are states, and Op some QM operator.
 
      Attributes:
         df: pd.DataFrame that holds information about the peaks;
@@ -76,7 +74,7 @@ class MCPeaks(Consolidator):
                  sort: bool = False,
                  keep_dark: bool = True) -> None:
         # TODO: implement validation of peaks against states.df
-        super(MCPeaks, self).__init__(df, source=source, sort=False)
+        super(MCTransitions, self).__init__(df, source=source, sort=False)
 
         # Validate and set MCStates, if provided
         self.states: MCStates | None = states
@@ -94,9 +92,9 @@ class MCPeaks(Consolidator):
             if self.tdms.shape[-1] != tdms.shape[-2]:
                 raise ValueError(f'Last two dimensions must be equal: {tdms.shape}')
 
-            if self.are_states_set and self.space.n_act_mo != tdms.shape[-1]:
+            if self.are_states_set and self.space.n_mo_act != tdms.shape[-1]:
                 raise ValueError(f'Last two dimensions must be equal to the size of active space: '
-                                 f'{tdms.shape[-1]} != {self.space.n_act_mo}')
+                                 f'{tdms.shape[-1]} != {self.space.n_mo_act}')
 
             if self.RESOURCE_COL not in self.df:
                 if len(tdms) != len(self):
@@ -119,7 +117,7 @@ class MCPeaks(Consolidator):
 
         self.reset_index()
 
-    def analyze(self: 'MCPeaks', save: bool = True, replace: bool = False) -> pd.DataFrame | None:
+    def analyze(self: 'MCTransitions', save: bool = True, replace: bool = False) -> pd.DataFrame | None:
         self.clear_properties()
 
         dfs = []
@@ -132,7 +130,7 @@ class MCPeaks(Consolidator):
         if not save:
             return pd.concat([self._df[self.OSC_COL], *dfs], axis=1)
 
-    def contract_tdms(self, integral: npt.NDArray, spaces: MOSpaces) -> npt.NDArray:
+    def contract_tdms(self, integral: npt.NDArray, spaces: MOSpacePartition) -> npt.NDArray:
         idx = self._df['resource_idx'].values
 
         int_as = integral[..., *spaces.active_2d]
@@ -142,7 +140,7 @@ class MCPeaks(Consolidator):
         mel_is = int_is.trace(axis1=-1, axis2=-2)
         return mel_as + mel_is
 
-    def get_state_properties(self: 'MCPeaks', props: list[str],
+    def get_state_properties(self: 'MCTransitions', props: list[str],
                              save: bool = True, replace: bool = False) -> pd.DataFrame | None:
         df_states = self.states.df[self.states.IDX_COLS + props]
 
@@ -171,7 +169,7 @@ class MCPeaks(Consolidator):
 
         self.update_properties(df, replace=replace)
 
-    def calculate_state_idx(self: 'MCPeaks', save: bool = True, replace: bool = False) -> pd.DataFrame | None:
+    def calculate_state_idx(self: 'MCTransitions', save: bool = True, replace: bool = False) -> pd.DataFrame | None:
         df_states = self.states.df[self.states.IDX_COLS]
 
         df = self._df[self.IDX_COLS].merge(
@@ -199,7 +197,7 @@ class MCPeaks(Consolidator):
 
         self.update_properties(df, replace=replace)
 
-    def calculate_peak_energy(self: 'MCPeaks', save: bool = True, replace: bool = False) -> pd.DataFrame | None:
+    def calculate_peak_energy(self: 'MCTransitions', save: bool = True, replace: bool = False) -> pd.DataFrame | None:
         if not self.are_states_set:
             raise ValueError("'states' attribute must be set to calculate peak energy")
 
@@ -216,7 +214,7 @@ class MCPeaks(Consolidator):
 
         self.update_properties(df, replace=replace)
 
-    def calculate_relative_energy(self: 'MCPeaks', scale: float = Eh2eV, offset: float = 0.0,
+    def calculate_relative_energy(self: 'MCTransitions', scale: float = Eh2eV, offset: float = 0.0,
                                   idx: npt.ArrayLike | None = None, condition: Selector | None = None,
                                   save: bool = True, replace: bool = True,
                                   col_name: str = RELATIVE_DE_COL, **kwargs) -> pd.DataFrame | None:
@@ -236,7 +234,7 @@ class MCPeaks(Consolidator):
 
         self.update_properties(df, replace=replace)
 
-    def calculate_rdm_diag_changes(self: 'MCPeaks', save: bool = True, replace: bool = False) -> pd.DataFrame | None:
+    def calculate_rdm_diag_changes(self: 'MCTransitions', save: bool = True, replace: bool = False) -> pd.DataFrame | None:
         if not self.are_states_set:
             raise ValueError("'states' attribute must be set to calculate RDM diagonal differences")
 
@@ -344,7 +342,7 @@ class MCPeaks(Consolidator):
                   states_key: str = 'states',
                   tdms_key: str = 'tdms',
                   instance_key: str = 'peaks',
-                  **kwargs) -> 'MCPeaks':
+                  **kwargs) -> 'MCTransitions':
         if isinstance(instance := data.get(instance_key, None), cls):
             return instance
         elif isinstance(instance, dict):

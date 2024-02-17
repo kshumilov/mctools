@@ -14,10 +14,10 @@ from .cistring.utils import ConfigArray, get_elec_count
 
 
 if TYPE_CHECKING:
-    from ..parser.lib import ParsingResult
+    from parsing.core.pattern import ParsingResultType
 
 __all__ = [
-    'MOSpaces',
+    'MOSpacePartition',
     'MCSpace',
     'ConfigTransform',
 ]
@@ -25,7 +25,7 @@ __all__ = [
 ConfigTransform = Callable[[ConfigArray], NoReturn]
 
 
-class MOSpaces:
+class MOSpacePartition:
     SpacesTuple: ClassVar[Type] = tuple[int, int, int, int, int]
 
     __slots__ = [
@@ -55,9 +55,9 @@ class MOSpaces:
                              f'frozen core, inactive, active, secondary, frozen virtual')
 
         self.mcspace = mcspace
-        if self.mcspace is not None and mcspace.n_act_mo != self.n_active:
+        if self.mcspace is not None and mcspace.n_mo_act != self.n_active:
             raise ValueError(f'Number of active spaces in MOSpaces must be equal '
-                             f'to the number of active spaces in MCSpace: {self.n_active} != {self.mcspace.n_act_mo}')
+                             f'to the number of active spaces in MCSpace: {self.n_active} != {self.mcspace.n_mo_act}')
 
         offsets = [0]
         for n_o in self.spaces[:-1]:
@@ -139,7 +139,7 @@ class MOSpaces:
     @classmethod
     def from_spaces(cls, active: int, /, core: int = 0,
                     virtual: int = 0, frozen_core: int = 0,
-                    frozen_virtual: int = 0) -> 'MOSpaces':
+                    frozen_virtual: int = 0) -> 'MOSpacePartition':
         spaces = (frozen_core, core, active, virtual, frozen_virtual)
         return cls(spaces)
 
@@ -303,21 +303,21 @@ class MCSpace:
             for mo_range in block:
                 match mo_range:
                     case [int(start), int(end)]:
-                        if not (0 <= start <= end <= self.n_act_mo):
+                        if not (0 <= start <= end <= self.n_mo_act):
                             raise ValueError(f'MO range {mo_range} in {label} block is invalid: '
-                                             f'indices must be within [0, {self.n_act_mo}]')
+                                             f'indices must be within [0, {self.n_mo_act}]')
                         occ_list.extend(range(start, end))
 
                     case int(index):
-                        if not (0 <= index < self.n_act_mo):
+                        if not (0 <= index < self.n_mo_act):
                             raise ValueError(f'MO range {mo_range} in {label} block is invalid: '
-                                             f'indices must be within [0, {self.n_act_mo}]')
+                                             f'indices must be within [0, {self.n_mo_act}]')
                         occ_list.append(index)
 
                     case [*indices]:
-                        if not all(0 <= i < self.n_act_mo for i in indices):
+                        if not all(0 <= i < self.n_mo_act for i in indices):
                             raise ValueError(f'MO range {mo_range} in {label} block is invalid: '
-                                             f'indices must be within [0, {self.n_act_mo}]')
+                                             f'indices must be within [0, {self.n_mo_act}]')
                         occ_list.extend(indices)
 
                     case _:
@@ -343,8 +343,8 @@ class MCSpace:
         df[self.MO_N_ORB_COL] = df[self.MO_OCC_COL].sum(axis=1)
 
         # Calculate number of electrons per each block
-        mo_idx = np.arange(self.n_act_mo)
-        df[self.MO_N_ELEC_COL] = df[self.MO_OCC_COL].apply(lambda x: (mo_idx < self.n_elec_act)[x].sum(), axis=1)
+        mo_idx = np.arange(self.n_mo_act)
+        df[self.MO_N_ELEC_COL] = df[self.MO_OCC_COL].step_to(lambda x: (mo_idx < self.n_elec_act)[x].sum(), axis=1)
 
         return df
 
@@ -354,12 +354,12 @@ class MCSpace:
         Parameters:
             blocks: Assumes that blocks are presented in expanded form and have been validated
         """
-        occ = np.full((len(blocks), self.n_act_mo), fill_value=False, dtype=dtype)
+        occ = np.full((len(blocks), self.n_mo_act), fill_value=False, dtype=dtype)
 
         for i, occ_list in enumerate(blocks.values):
             occ[i, occ_list] = True
 
-        cols = pd.MultiIndex.from_product(([self.MO_OCC_COL], np.arange(self.n_act_mo)))
+        cols = pd.MultiIndex.from_product(([self.MO_OCC_COL], np.arange(self.n_mo_act)))
         return pd.DataFrame(occ, index=blocks.index, columns=cols)
 
     def get_mo_block_masks(self, blocks: MOBlocks, /) -> pd.DataFrame:
@@ -478,7 +478,7 @@ class MCSpace:
         return self.graph.n_spaces
 
     @property
-    def n_act_mo(self) -> int:
+    def n_mo_act(self) -> int:
         return self.graph.n_mo
 
     @property
@@ -541,12 +541,12 @@ class MCSpace:
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls, data: ParsingResult, /,
+    def from_dict(cls, data: ParsingResultType, /,
                   active_spaces_key: str = 'active_spaces',
                   active_elec_key: str = 'elec_act',
                   max_hole_key: str = 'max_hole',
                   max_elec_key: str = 'max_elec',
-                  instance_key: str = 'space',
+                  instance_key: str = 'mcspace',
                   **kwargs) -> 'MCSpace':
         if isinstance(instance := data.get(instance_key, None), cls):
             return instance

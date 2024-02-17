@@ -1,11 +1,13 @@
-import re
+from __future__ import annotations
+
 from typing import Optional, Iterator
 
 import numpy as np
 from scipy import sparse
 
-from ..lib import ProcessedPattern, search_in_file, int_patt
-
+from ..core import ProcessedPattern
+from ..core.pattern import int_patt
+from ..oldlib import search_in_file
 
 __all__ = [
     'read_rwfdump',

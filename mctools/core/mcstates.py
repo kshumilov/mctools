@@ -15,10 +15,10 @@ from .utils.constants import Eh2eV
 from .mcspace import MCSpace
 
 if TYPE_CHECKING:
-    from .mcpeaks import MCPeaks
+    from .mctransitions import MCTransitions
     from .base import Selector
     from .mcspace import ConfigTransform
-    from ..parser.lib import ParsingResult
+    from parsing.core.pattern import ParsingResultType
 
 __all__ = [
     'MCStates',
@@ -55,20 +55,20 @@ class MCStates(Consolidator):
     STATE_COL = 'state'
     CI_NORM_COL = 'norm'
     DOMINANT_CONFIG_COL = 'config_class'
-    SOURCE_COL = 'state_source'
+    SOURCE_COL = f'{STATE_COL}_source'
     RESOURCE_COL = 'resource_idx'  # index of related resource in ci_vecs and rdm_diag, see _state_map
 
     IDX_COLS = [STATE_COL, SOURCE_COL]  # Columns used to identify the states uniquely
     DEFAULT_COLS = [*IDX_COLS, ENERGY_COL]  # Permanent property columns for the df
 
-    __slots__ = [
+    __slots__ = (
         'ci_vecs',
         'rdm_diags',
 
         'mcspace',
-        'peaks',
+        'transitions',
         '_state_map'
-    ]
+    )
 
     ci_vecs: sparse.csr_array | sparse.lil_array  # Sparse array of CI vectors
     rdm_diags: np.ndarray
@@ -92,7 +92,7 @@ class MCStates(Consolidator):
         super(MCStates, self).__init__(df, source=source, sort=False)
 
         if mcspace is not None:
-            if mcspace.n_act_mo != rdm_diags.shape[1]:
+            if mcspace.n_mo_act != rdm_diags.shape[1]:
                 raise ValueError("Number of active MOs in MCSpace must be equal to number of MOs in 'rdm_diags' array")
 
             if mcspace.n_configs != ci_vecs.shape[1]:
@@ -101,7 +101,7 @@ class MCStates(Consolidator):
 
         self.mcspace = mcspace
         self._state_map = np.arange(len(self))
-        self.peaks: MCPeaks | None = None
+        self.transitions: MCTransitions | None = None
         # self.df['resource_idx'] = self._state_map
 
         if sort:
@@ -113,9 +113,9 @@ class MCStates(Consolidator):
         self._df = self._df.iloc[idx]
 
         self.reset_index()
-        if self.peaks is not None:
-            if self.peaks.INITIAL_COL in self.peaks.df or self.peaks.FINAL_COL in self.peaks.df:
-                self.peaks.calculate_state_idx(save=True, replace=True)
+        if self.transitions is not None:
+            if self.transitions.INITIAL_COL in self.transitions.df or self.transitions.FINAL_COL in self.transitions.df:
+                self.transitions.calculate_state_idx(save=True, replace=True)
 
     def analyze(self, idx: npt.ArrayLike | None = None, condition: Selector | None = None,
                 save=True, replace=False, **kwargs) -> pd.DataFrame | None:
@@ -167,8 +167,8 @@ class MCStates(Consolidator):
         if not save:
             return pd.concat([self._df[self.ENERGY_COL], *dfs], axis=1)
 
-        if self.peaks is not None:
-            self.peaks.analyze(save=True)
+        if self.transitions is not None:
+            self.transitions.analyze(save=True)
 
     def partition_rdm_diag(self, idx: npt.ArrayLike | None = None, condition: Selector | None = None, *,
                            save: bool = True, replace: bool = False, **kwargs) -> pd.DataFrame | None:
@@ -367,80 +367,80 @@ class MCStates(Consolidator):
         # FIXME: return DataFrame
         return self._state_map[mapped], np.take_along_axis(ovlp, mapped[:, np.newaxis], axis=1).ravel()
 
-    def merge(self, other: 'MCStates', alignment, strategy: str = 'skip', ignore_space: bool = False) -> NoReturn:
-        raise NotImplementedError('merge functionality is not implemented')
+    # def merge(self, other: 'MCStates', alignment, strategy: str = 'skip', ignore_space: bool = False) -> NoReturn:
+    #     raise NotImplementedError('merge functionality is not implemented')
+    #
+    #     if not ignore_space and (self.mcspace is None or other.mcspace is None):
+    #         warnings.warn('At least one of MCStates does not have well defined MCSpace, proceed with caution')
+    #
+    #     if not ignore_space and self.mcspace != other.mcspace:
+    #         raise ValueError('spaces of states are different, overlap is poorly defined')
+    #
+    #     for region in alignment:
+    #         match region:
+    #             case None, slice():
+    #                 *_, sl = region
+    #                 self.append(other[sl], ignore_space=ignore_space, reset_index=False)
+    #
+    #             case slice(), slice():
+    #                 sl1, sl2 = region
+    #                 if strategy == 'overwrite':
+    #                     self[sl1] = other[sl2]
+    #                 elif strategy == 'append':
+    #                     self.append(other[sl2], ignore_space=ignore_space, reset_index=False)
+    #
+    #     self.sort(self.ENERGY_COL)
 
-        if not ignore_space and (self.mcspace is None or other.mcspace is None):
-            warnings.warn('At least one of MCStates does not have well defined MCSpace, proceed with caution')
-
-        if not ignore_space and self.mcspace != other.mcspace:
-            raise ValueError('spaces of states are different, overlap is poorly defined')
-
-        for region in alignment:
-            match region:
-                case None, slice():
-                    *_, sl = region
-                    self.append(other[sl], ignore_space=ignore_space, reset_index=False)
-
-                case slice(), slice():
-                    sl1, sl2 = region
-                    if strategy == 'overwrite':
-                        self[sl1] = other[sl2]
-                    elif strategy == 'append':
-                        self.append(other[sl2], ignore_space=ignore_space, reset_index=False)
-
-        self.sort(self.ENERGY_COL)
-
-    def append(self, other: 'MCStates', ignore_space: bool = False, reset_index: bool = True) -> NoReturn:
-        """Extends the current MCStates with provided one.
-
-        The function does not check for duplicates or overlaps.
-        """
-        if not ignore_space and (self.mcspace is None or other.mcspace is None):
-            warnings.warn('At least one of MCStates does not have well defined MCSpace, proceed with caution')
-
-        if not ignore_space and self.mcspace != other.mcspace:
-            raise ValueError('spaces of states are different, overlap is poorly defined')
-
-        if self.mcspace.n_act_mo != other.mcspace.n_act_mo:
-            raise ValueError('number of active MOs is different between instances of MCStates, cannot transfer '
-                             'rdm_diags')
-
-        warnings.warn('MCStates.extend() does not preserve computed properties')
-
-        # Extend rdm_diag
-        self.rdm_diags = np.vstack((self.rdm_diags, other.rdm_diags))
-
-        # Extend ci_vec
-        if sparse.isspmatrix_lil(self.ci_vecs):
-            self.ci_vecs = sparse.vstack([self.ci_vecs, other.ci_vecs.tolil()], format='lil', dtype=self.ci_vecs.dtype)
-        else:
-            self.ci_vecs = sparse.vstack([self.ci_vecs, other.ci_vecs.tocsr()], format='csr', dtype=self.ci_vecs.dtype)
-
-        # Update state map
-        new_state_map = np.arange(len(self) + len(other))
-        new_state_map[:len(self)] = self._state_map + len(self)  # FIXME: might be a bug here
-        self._state_map = new_state_map
-
-        # Extend df
-        self._df = pd.concat([self._df[self.DEFAULT_COLS], other._df[self.DEFAULT_COLS]], axis=0, copy=True)
-
-        if self.peaks is not None or other.peaks is not None:
-            warnings.warn('MCStates.extend() with peaks assigned is not tested')
-
-            # FIXME: implement peak extension
-            if bool(self.peaks) != bool(other.peaks):
-                valid_peaks = self.peaks if self.peaks is not None else other.peaks
-                self.peaks = valid_peaks
-            else:
-                new_peaks_df = pd.concat(
-                    [self.peaks.df[self.peaks.DEFAULT_COLS],
-                     other.peaks.df[self.peaks.DEFAULT_COLS]],
-                    axis=0, copy=True)
-                self.peaks = self.peaks.__class__(new_peaks_df, states=self)
-
-        if reset_index:
-            self.reset_index()
+    # def append(self, other: 'MCStates', ignore_space: bool = False, reset_index: bool = True) -> NoReturn:
+    #     """Extends the current MCStates with provided one.
+    #
+    #     The function does not check for duplicates or overlaps.
+    #     """
+    #     if not ignore_space and (self.mcspace is None or other.mcspace is None):
+    #         warnings.warn('At least one of MCStates does not have well defined MCSpace, proceed with caution')
+    #
+    #     if not ignore_space and self.mcspace != other.mcspace:
+    #         raise ValueError('spaces of states are different, overlap is poorly defined')
+    #
+    #     if self.mcspace.n_act_mo != other.mcspace.n_act_mo:
+    #         raise ValueError('number of active MOs is different between instances of MCStates, cannot transfer '
+    #                          'rdm_diags')
+    #
+    #     warnings.warn('MCStates.extend() does not preserve computed properties')
+    #
+    #     # Extend rdm_diag
+    #     self.rdm_diags = np.vstack((self.rdm_diags, other.rdm_diags))
+    #
+    #     # Extend ci_vec
+    #     if sparse.isspmatrix_lil(self.ci_vecs):
+    #         self.ci_vecs = sparse.vstack([self.ci_vecs, other.ci_vecs.tolil()], format='lil', dtype=self.ci_vecs.dtype)
+    #     else:
+    #         self.ci_vecs = sparse.vstack([self.ci_vecs, other.ci_vecs.tocsr()], format='csr', dtype=self.ci_vecs.dtype)
+    #
+    #     # Update state map
+    #     new_state_map = np.arange(len(self) + len(other))
+    #     new_state_map[:len(self)] = self._state_map + len(self)  # FIXME: might be a bug here
+    #     self._state_map = new_state_map
+    #
+    #     # Extend df
+    #     self._df = pd.concat([self._df[self.DEFAULT_COLS], other._df[self.DEFAULT_COLS]], axis=0, copy=True)
+    #
+    #     if self.peaks is not None or other.peaks is not None:
+    #         warnings.warn('MCStates.extend() with peaks assigned is not tested')
+    #
+    #         # FIXME: implement peak extension
+    #         if bool(self.peaks) != bool(other.peaks):
+    #             valid_peaks = self.peaks if self.peaks is not None else other.peaks
+    #             self.peaks = valid_peaks
+    #         else:
+    #             new_peaks_df = pd.concat(
+    #                 [self.peaks.df[self.peaks.DEFAULT_COLS],
+    #                  other.peaks.df[self.peaks.DEFAULT_COLS]],
+    #                 axis=0, copy=True)
+    #             self.peaks = self.peaks.__class__(new_peaks_df, states=self)
+    #
+    #     if reset_index:
+    #         self.reset_index()
 
     def update_space(self, new_space: MCSpace, transform: ConfigTransform | None = None) -> NoReturn:
         # Update addresses
@@ -531,15 +531,15 @@ class MCStates(Consolidator):
             preserve_key = new_df.index.values
 
             def cond(df):
-                included_initial = df[self.peaks.INITIAL_COL].isin(preserve_key)
-                included_final = df[self.peaks.FINAL_COL].isin(preserve_key)
+                included_initial = df[self.transitions.INITIAL_COL].isin(preserve_key)
+                included_final = df[self.transitions.FINAL_COL].isin(preserve_key)
                 return included_initial & included_final
 
-            self.peaks.calculate_state_idx()
-            idx = self.peaks.filter(condition=cond)
+            self.transitions.calculate_state_idx()
+            idx = self.transitions.filter(condition=cond)
 
-            new_peaks_df = self.peaks.df[idx].copy(deep=True)
-            new_states.peaks = self.peaks.__class__(new_peaks_df, states=new_states)
+            new_peaks_df = self.transitions.df[idx].copy(deep=True)
+            new_states.transitions = self.transitions.__class__(new_peaks_df, states=new_states)
 
         return new_states
 
@@ -556,14 +556,14 @@ class MCStates(Consolidator):
         if not isinstance(other, self.__class__):
             raise TypeError(f'new_states must be an instance of {self.__class__.__name__}')
 
-        if self.mcspace.n_act_mo != other.mcspace.n_act_mo:
+        if self.mcspace.n_mo_act != other.mcspace.n_mo_act:
             raise ValueError('Number of active MOs is different between instances of MCStates, cannot transfer '
                              'rdm_diags')
 
         # if self.space != states.space:
         #     raise ValueError('MCSpaces are not the same')
 
-        if self.peaks is not None or other.peaks is not None:
+        if self.transitions is not None or other.transitions is not None:
             raise NotImplementedError('Index like setting is not implemented in the presence of peaks')
 
         key = self._validate_key(key)
@@ -587,14 +587,14 @@ class MCStates(Consolidator):
         key = self._validate_key(key)
 
         drop_key = self._df.index[key]
-        if self.peaks is not None:
+        if self.transitions is not None:
             warnings.warn('Slicing MCStates with peaks assigned is not tested')
 
-            temp_df = self.peaks.calculate_state_idx()
-            included_initial = temp_df[self.peaks.INITIAL_COL].isin(drop_key)
-            included_final = temp_df[self.peaks.FINAL_COL].isin(drop_key)
-            new_peaks_df = self.peaks._df[~(included_initial | included_final)].copy(deep=True)
-            self.peaks = self.peaks.__class__(new_peaks_df, states=new_peaks_df)
+            temp_df = self.transitions.calculate_state_idx()
+            included_initial = temp_df[self.transitions.INITIAL_COL].isin(drop_key)
+            included_final = temp_df[self.transitions.FINAL_COL].isin(drop_key)
+            new_peaks_df = self.transitions._df[~(included_initial | included_final)].copy(deep=True)
+            self.transitions = self.transitions.__class__(new_peaks_df, states=new_peaks_df)
 
         self._df.drop(drop_key, inplace=True)
         preserve_key = self._df.index.values  # indices of states that are preserved
@@ -634,12 +634,12 @@ class MCStates(Consolidator):
         E = self._df.loc[idx, self.ENERGY_COL] - (self.min_energy * shift_ground)
 
         mo_block_labels = [m for m in self.mcspace.mo_block_labels if m in self._df] if include_mo else []
-        df_rdm = self._df.loc[idx, mo_block_labels].apply(
+        df_rdm = self._df.loc[idx, mo_block_labels].step_to(
             lambda r: ' + '.join([f'{l}({v:>5.2f})' for l, v in r.items()]), axis=1)
 
         config_class_labels = [c for c in self.mcspace.config_class_labels if
                                c in self._df] if include_config_class else []
-        df_config_class = self._df.loc[idx, config_class_labels].apply(
+        df_config_class = self._df.loc[idx, config_class_labels].step_to(
             lambda r: ' + '.join([f'{l}({v:7.3%})' for l, v in r.items()]), axis=1)
 
         print('=' * BAR_WIDTH)
@@ -686,7 +686,7 @@ class MCStates(Consolidator):
             print('=' * BAR_WIDTH)
 
     @classmethod
-    def from_dict(cls, data: ParsingResult, /,
+    def from_dict(cls, data: ParsingResultType, /,
                   df_key: str = 'df_states',
                   ci_vecs_key: str = 'ci_vecs',
                   rdm_diags_key: str = 'rdm_diags',
@@ -706,6 +706,7 @@ class MCStates(Consolidator):
 
             try:
                 space = MCSpace.from_dict(data)
+                warnings.warn(f'Found {MCSpace}')
             except (KeyError, ValueError) as exc:
                 warnings.warn(f'{MCSpace.__name__} is not found expect reduced '
                               f'functionality: {exc.args}', RuntimeWarning)
@@ -717,9 +718,9 @@ class MCStates(Consolidator):
                                            mcspace=space,
                                            sort=kwargs.get('sort_states', False)))
             try:
-                from .mcpeaks import MCPeaks
+                from .mctransitions import MCTransitions
 
-                instance.peaks = MCPeaks.from_dict(data, states_key=instance_key, **kwargs)
+                instance.transitions = MCTransitions.from_dict(data, states_key=instance_key, **kwargs)
             except KeyError:
                 pass
         else:
@@ -746,7 +747,7 @@ class MCStates(Consolidator):
 
     @property
     def are_peaks_set(self) -> bool:
-        return self.peaks is not None
+        return self.transitions is not None
 
     @property
     def E(self) -> np.ndarray:

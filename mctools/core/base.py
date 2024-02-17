@@ -48,9 +48,9 @@ class Consolidator(abc.ABC):
     IDX_COLS: list[str] = []
     DEFAULT_COLS: list[str] = [SOURCE_COL, RESOURCE_COL]
 
-    __slots__ = [
+    __slots__ = (
         '_df',
-    ]
+    )
 
     _df: pd.DataFrame
 

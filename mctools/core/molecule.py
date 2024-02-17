@@ -10,8 +10,7 @@ from .base import Consolidator, Selector
 
 
 if TYPE_CHECKING:
-    from ..parser.lib import ParsingResult
-
+    from parsing.core.pattern import ParsingResultType
 
 __all__ = [
     "Molecule",
@@ -29,9 +28,11 @@ class Molecule(Consolidator):
         name: str --- name of the molecule, optional
         source: str --- filename of the origin
     """
-    __slots__ = [
-        "charge", "multiplicity",
-    ]
+    __slots__ = (
+        '_df',
+        'charge',
+        'multiplicity',
+    )
 
     # Cartesian Coordinates
     X_COL = 'x'
@@ -48,7 +49,6 @@ class Molecule(Consolidator):
     DEFAULT_COLS = [*IDX_COLS, *COORDS_COLS, ATOMIC_NUMBER_COL]
 
     _df: pd.DataFrame  # Table that hold properties of atoms in the molecule
-    name: str | None
 
     def __init__(self, df: pd.DataFrame, /,
                  source: str | None = None,
@@ -78,14 +78,14 @@ class Molecule(Consolidator):
         return self.Z.sum() - self.charge
     
     @classmethod
-    def from_dict(cls, data: ParsingResult, /,
+    def from_dict(cls, data: ParsingResultType, /,
                   df_key: str = 'df_molecule',
                   charge_key: str = 'charge',
                   multiplicity_key: str = 'multiplicity',
                   source_key: str = 'source',
                   instance_key: str = 'molecule',
                   **kwargs) -> 'Molecule':
-        if isinstance(instance := data.get(instance_key, None), cls):
+        if isinstance(instance := data.get(instance_key), cls):
             return instance
         elif isinstance(instance, dict):
             instance = cls.from_dict(instance, **kwargs)
@@ -102,8 +102,7 @@ class Molecule(Consolidator):
             if multiplicity_key := data.pop(multiplicity_key, None):
                 args.append(multiplicity_key)
 
-            instance = data.setdefault('molecule',
-                                       cls(df, source, *args))
+            instance = data.setdefault('molecule', cls(df, source, *args))
         else:
             raise ValueError(f"{cls.__name__} did not recognized '{instance_key}' "
                              f"item in data: {instance}")

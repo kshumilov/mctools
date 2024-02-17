@@ -1,7 +1,8 @@
 import warnings
+
 from collections import defaultdict
 from itertools import product
-from typing import NamedTuple, NoReturn, Literal, Any
+from typing import NamedTuple, NoReturn, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -120,6 +121,7 @@ class SimpleGraph:
         The weight of a node is thus can be written as:
             nodes[e, o] = (len(path) choose #diagonals steps)
                         = (o choose e) <--> reverse
+                        OR
                         = (#o - o choose #e - e) <--> direct
         """
         nodes = np.zeros((self.n_elec + 1, self.n_orb + 1), dtype=self.dtype)
@@ -143,7 +145,7 @@ class SimpleGraph:
         However, there are only (#elec + 1) * (#orb - #elec + 1) non-zero elements
         which form a slanted array.
 
-        For example, here is directly ordered weights of CAS(7o, 3e) in Kramer's unrestricted formalism:
+        For examples, here is directly ordered weights of CAS(7o, 3e) in Kramer's unrestricted formalism:
               <--#orb - #elec + 1-->
               0   1   2   3   4   5   6   7 --- #orb + 1
            ---------------------------------
