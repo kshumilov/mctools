@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, IO, AnyStr
 
-from parsing.core import SequentialParser, ParsingError
+import attr
+
+from parsing.core.parser import SequentialParser, ParserClassKey
 
 from parsing.gaussian.log.route import Route, Link, RouteParser
 from parsing.gaussian.log.links import LinksParser
 
-
 if TYPE_CHECKING:
-    from ...core.parser import BaseFileParserType
+    from parsing.core import Parser
+
 
 __all__ = [
     'LogParser',
@@ -24,18 +26,11 @@ class LogParser(SequentialParser):
         LinksParser,
     ]
 
-    def get_parser_args(self, parser_cls: type[BaseFileParserType]) -> list[Any]:
-        args = super(LogParser, self).get_parser_args(parser_cls)
-
-        if issubclass(parser_cls, LinksParser):
-            for result in reversed(self.storage):
-                if isinstance(result, Route):
-                    args.append(result)
-                    break
-            else:
-                raise ParsingError(f'{self!r}: Route not found')
-
-        return args
+    def update_config(self, parser: Parser, data, config_key: ParserClassKey) -> None:
+        if isinstance(parser, RouteParser):
+            links_config = self.config.parsers_config[LinksParser]
+            links_config = attr.evolve(links_config, route=data)
+            self.config.parsers_config[LinksParser] = links_config
 
 
 if __name__ == '__main__':

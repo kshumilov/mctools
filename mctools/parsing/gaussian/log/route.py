@@ -178,9 +178,7 @@ class Route:
 
 
 class RouteParser(FileParser):
-    def _parse_file(self, file: IO[AnyStr]) -> Any:
-        super(RouteParser, self)._parse_file(file)
-
+    def parse_file(self, file: IO[AnyStr]) -> Any:
         route = Route()
 
         def add_route_line(line: AnyStr) -> bool:
@@ -191,7 +189,7 @@ class RouteParser(FileParser):
                     return True
             return False
 
-        until_predicate = self.stepper.get_predicate('Leave Link')
+        until_predicate = self.stepper.get_str_predicate('Leave Link')
         self.stepper.step_to_first(add_route_line, until_predicate)
 
         if not route.is_complete:

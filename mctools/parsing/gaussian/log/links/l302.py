@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from core import Resources
-from parsing.core import Task, ListenerSettings
+from parsing.core import Task, ListenerConfig
 from .parser import LinkParser
 
 __all__ = [
@@ -20,7 +20,7 @@ class L302Parser(LinkParser):
         resource: Task(
             anchor=anchor,
             handle='read_square_matrix',
-            settings=ListenerSettings(dispatch_file=False)
+            settings=ListenerConfig(dispatch_file=False)
         )
         for resource, anchor in zip(Resources.ao_int1e_stv, ANCHORS_STV)
     }

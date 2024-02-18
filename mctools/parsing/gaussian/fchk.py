@@ -11,7 +11,7 @@ import pandas as pd
 from numpy import ndarray, dtype
 
 from core import Molecule, Basis
-from parsing.core import FileStepper, FileParser, BaseFileStepper
+from parsing.core import FileStepper, FileParser, LineStepper
 from parsing.core.pattern import ProcessedPattern, simple_float_tmplt, simple_int_tmplt
 
 
@@ -227,7 +227,7 @@ class FchkParser(FileParser):
 
         return molorb
 
-    def _parse_file(self, file: IO[AnyStr]) -> Any:
+    def parse_file(self, file: IO[AnyStr]) -> Any:
         header = self.read_description()
 
     def assign_task(self, option: FchkParserOptions) -> Optional[callable | tuple[callable, str]]:

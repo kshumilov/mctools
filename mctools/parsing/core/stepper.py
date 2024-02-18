@@ -1,68 +1,77 @@
 from __future__ import annotations
 
+from typing import IO, AnyStr, Callable, Any, Iterator, TypeVar, Generic, Literal, TypeAlias
 
-from typing import IO, AnyStr, Callable, Any, Iterator, TypeVar
+import attr
 
-from .error import ParsingError
+from .error import ParsingError, EOFReached, InvalidFile
+from .utils import check_file, short_file_repr
 
 __all__ = [
     # Classes
-    'BaseFileStepper',
+    'LineStepper',
     'FileStepper',
 
     # Types
-    'BaseFileStepperType',
+    'LineStepperType',
     'Predicate',
     'Anchor',
 ]
 
 
-class FileHandler:
-    file: IO[AnyStr] | None = None
-    eof_line: str | bytes = ''
-
-    def set_eof_line(self, file: IO[AnyStr]) -> None:
-        self.eof_line = b'' if 'b' in file.mode else ''
-
-    def set_file(self, file: IO[AnyStr] | None) -> None:
-        self.file = file
-        self.set_eof_line(file)
-
-    def __repr__(self) -> str:
-        file_repr = f'file={self.file.name!r}'
-        return f'{self.__class__.__name__}({file_repr})'
-
-
 Processor = Callable[[AnyStr], bool | Any]
 
 
-class BaseFileStepper(FileHandler):
-    line: AnyStr | None = None
+@attr.define(repr=True)
+class FileHandler(Generic[AnyStr]):
+    file: IO[AnyStr] | None = attr.field(default=None, init=False, repr=short_file_repr)
 
-    def __repr__(self) -> str:
-        file_repr = f'file={self.file!r}'
-        if self.file and self.line:
-            file_repr += f', line={self.line[:15]!r} offset={self.offset!r}'
-        return f'{self.__class__.__name__}({file_repr})'
+    def set_file(self, file: IO[AnyStr] | None, /, *, check: bool = True) -> None:
+        if check and not check_file(file):
+            raise ValueError(f'File is not workable: {file!r}')
 
-    def set_file(self, file: IO[AnyStr] | None, line: AnyStr = None) -> None:
-        super(BaseFileStepper, self).set_file(file)
+        self.file = file
+
+    def unset_file(self) -> IO[AnyStr]:
+        file = self.file
+        self.file = None
+        return file
+
+    @property
+    def workable(self) -> bool:
+        return check_file(self.file)
+
+    @classmethod
+    def from_file(cls, file: IO[AnyStr]) -> 'FileHandler':
+        handler = cls()
+        handler.set_file(file, check=True)
+        return handler
+
+
+@attr.define(repr=False)
+class LineStepper(FileHandler[AnyStr]):
+    on_eof: Literal['raise', 'skip'] = attr.field(
+        default='skip',
+        validator=attr.validators.instance_of(str)
+    )
+    line: AnyStr | None = attr.field(default=None, init=False)
+
+    def set_file(self, file: IO[AnyStr] | None, /, *, check: bool = True, line: AnyStr = None) -> None:
+        super(LineStepper, self).set_file(file, check=check)
         self.line = line
 
-    @property
-    def has_parsable_file(self) -> bool:
-        return not self.file.closed and self.file.readable() and self.file.seekable()
-
-    @property
-    def end_of_file(self) -> bool:
-        return self.line == self.eof_line
+    def unset_file(self) -> tuple[IO[AnyStr], AnyStr]:
+        file = super(LineStepper, self).unset_file()
+        last_line = self.line
+        self.line = None
+        return file, last_line
 
     @property
     def is_running(self) -> bool:
-        return self.line and self.line != self.eof_line
+        return self.workable and self.line is not None
 
     @property
-    def offset(self) -> int | None:
+    def line_offset(self) -> int | None:
         return self.file.tell() - len(self.line) if self.line else None
 
     def readline(self) -> AnyStr:
@@ -71,19 +80,19 @@ class BaseFileStepper(FileHandler):
 
     def step_forward(self) -> bool:
         self.line: AnyStr = self.file.readline()
-        return not self.end_of_file
+        return bool(self.line)
 
     def step_back(self) -> bool:
+        if self.line is None:
+            raise ParsingError("Cannot determine how far to go, no line information")
+
         self.file.seek(self.file.tell() - len(self.line))
         self.line = None
-        return not self.end_of_file
-
-    def check_file(self):
-        if not self.has_parsable_file:
-            raise ParsingError(f"{self!r}: File {self.file!r} is not parsable")
+        return self.file.tell() != 0
 
     def step_to(self, anchor_in: Predicate, /, *, check_last_read: bool = False) -> bool:
-        self.check_file()
+        if not self.workable:
+            raise InvalidFile(f'File is not workable: {self.file!r}')
 
         if check_last_read and self.line:
             if anchor_in(self.line):
@@ -93,10 +102,11 @@ class BaseFileStepper(FileHandler):
             if anchor_in(self.line):
                 return True
 
-        return False
+        return self.handle_eof()
 
     def step_to_first(self, anchor_in: Predicate, until_in: Predicate, /, *, check_last_read: bool = False) -> bool:
-        self.check_file()
+        if not self.workable:
+            raise InvalidFile(f'File is not workable: {self.file!r}')
 
         if check_last_read and self.line:
             if until_in(self.line):
@@ -112,10 +122,11 @@ class BaseFileStepper(FileHandler):
             if anchor_in(self.line):
                 return True
 
-        return False
+        return self.handle_eof()
 
     def step_until(self, anchors: list[Predicate], returns: list[Any], /, *, check_last_read: bool = False) -> bool | Any:
-        self.check_file()
+        if not self.workable:
+            raise ValueError(f'File is not workable: {self.file!r}')
 
         if check_last_read and self.line:
             for anchor, r in zip(anchors, returns):
@@ -127,25 +138,38 @@ class BaseFileStepper(FileHandler):
                 if anchor(self.line):
                     return r
 
+        return self.handle_eof()
+
+    def handle_eof(self) -> bool:
+        if self.on_eof == 'raise':
+            raise EOFReached(f'File {short_file_repr(self.file)!r} reached EOF')
         return False
 
+    def __repr__(self) -> str:
+        result = []
+        if self.workable:
+            if self.is_running:
+                result.append(f'line={self.line[:10]!r}')
+                result.append(f'line_offset={self.line_offset!r}')
+            else:
+                result.append(f'line={None!r}')
+
+        result.append(f'file={short_file_repr(self.file)}')
+        result.append(f'on_eof={self.on_eof!r}')
+        result = ', '.join(result)
+        return f'{self.__class__.__name__}({result})'
+
     @staticmethod
-    def get_predicate(anchor: Anchor | None) -> Predicate:
+    def get_str_predicate(anchor: AnyStr | None) -> Predicate:
         if anchor is None:
-            return lambda l: False  # Always False
+            return lambda line: False  # Always False
         elif isinstance(anchor, (str, bytes)):
             return lambda line: anchor in line
-        elif callable(anchor):
-            return anchor
         else:
             raise ValueError(f"Invalid anchor: {anchor!r}")
 
-    @staticmethod
-    def always_false(line: str) -> bool:
-        return False
 
-
-BaseFileStepperType = TypeVar('BaseFileStepperType', bound=BaseFileStepper, covariant=True)
+LineStepperType = TypeVar('LineStepperType', bound=LineStepper, covariant=True)
 
 
 class TargetNotFound(ParsingError):
@@ -177,11 +201,11 @@ class RequirementNotSatisfied(ParsingError):
     pass
 
 
-Predicate = Callable[[AnyStr], bool]
-Anchor = AnyStr | Predicate
+Predicate: TypeAlias = Callable[[AnyStr], bool]
+Anchor: TypeAlias = AnyStr | None
 
 
-class FileStepper(BaseFileStepper):
+class FileStepper(LineStepper):
     def target_not_found(
             self,
             message: str | None,
@@ -207,19 +231,19 @@ class FileStepper(BaseFileStepper):
 
     def step_skip_until(self, until: Anchor | None,
                         check_last_read: bool = False) -> tuple[AnyStr, int]:
-        target_in = self.get_predicate(until)
+        target_in = self.get_str_predicate(until)
 
         if check_last_read and self.line and target_in(self.line):
-            return self.line, self.offset
+            return self.line, self.line_offset
 
         while self.step_forward():
             if target_in(self.line):
-                return self.line, self.offset
+                return self.line, self.line_offset
 
         self.target_not_found(message=f"Target '{until!r}' not found")
 
     def findall(self, target: Anchor, /, *, max_steps: int = -1, check_last_read: bool = False) -> list[AnyStr]:
-        target_in = self.get_predicate(target)
+        target_in = self.get_str_predicate(target)
 
         result: list[AnyStr] = []
 
@@ -238,15 +262,15 @@ class FileStepper(BaseFileStepper):
         return result
 
     def finditer(self, target: Anchor, /, *, max_steps: int = -1, check_last_read: bool = False) -> Iterator[AnyStr, int]:
-        target_in = self.get_predicate(target)
+        target_in = self.get_str_predicate(target)
 
         if check_last_read and self.line and target_in(self.line):
-            yield self.line, self.offset
+            yield self.line, self.line_offset
 
         n_steps = 0
         while self.step_forward():
             if target_in(self.line):
-                yield self.line, self.offset
+                yield self.line, self.line_offset
 
             if 0 <= max_steps <= n_steps:
                 break
@@ -260,7 +284,7 @@ class FileStepper(BaseFileStepper):
             check_last_read: bool = False,
             err_msg: str | None = None
     ) -> tuple[AnyStr, int] | None:
-        target_in = self.get_predicate(target)
+        target_in = self.get_str_predicate(target)
 
         if check_last_read and self.line and target_in(self.line):
             return self.line, self.file.tell()
@@ -268,7 +292,7 @@ class FileStepper(BaseFileStepper):
         n_steps = 0
         while self.step_forward():
             if target_in(self.line):
-                return self.line, self.offset
+                return self.line, self.line_offset
 
             if 0 <= max_steps <= n_steps:
                 return self.target_not_found(message=err_msg, n_steps=n_steps,
@@ -284,11 +308,11 @@ class FileStepper(BaseFileStepper):
             check_last_read: bool = False,
             err_msg: str | None = None
     ) -> tuple[AnyStr, int] | None:
-        target_in = self.get_predicate(target)
-        terminator_in = self.get_predicate(terminator)
+        target_in = self.get_str_predicate(target)
+        terminator_in = self.get_str_predicate(terminator)
 
         if check_last_read and self.line and target_in(self.line):
-            return self.line, self.offset
+            return self.line, self.line_offset
 
         n_steps = 0
         while self.step_forward():
@@ -297,7 +321,7 @@ class FileStepper(BaseFileStepper):
                                              error_type=TerminatorReached)
 
             if target_in(self.line):
-                return self.line, self.offset
+                return self.line, self.line_offset
 
             if 0 <= max_steps <= n_steps:
                 return self.target_not_found(message=err_msg, n_steps=n_steps,

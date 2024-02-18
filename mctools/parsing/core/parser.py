@@ -5,25 +5,28 @@ import pathlib
 import sys
 import warnings
 
+import attr
+
 from dataclasses import dataclass, field
-from collections import defaultdict, deque
+from collections import defaultdict, deque, Counter
 from functools import partial
-from typing import IO, Any, Callable, Optional, AnyStr, Iterable, Literal, TypeVar
+from typing import IO, Any, Callable, Optional, AnyStr, Iterable, Literal, TypeVar, Generic, ClassVar, TypeAlias, Type, \
+    NamedTuple, MutableMapping
 
 from core.resources import Resources
 
-from .error import ParsingError
+from .error import ParsingError, ParserNotPrepared
 from .resources import ResourceHandler
-from .stepper import BaseFileStepper, BaseFileStepperType, Predicate, Anchor
+from .stepper import LineStepper, Predicate, Anchor
 
 
 __all__ = [
-    'BaseFileParser',
+    'Parser',
     'FileParser',
     'CompositeParser',
     'SequentialParser',
 
-    'ListenerSettings',
+    'ListenerConfig',
     'Listener',
     'DispatchFileParser',
 
@@ -36,217 +39,334 @@ __all__ = [
 ]
 
 
-class BaseFileParser(metaclass=abc.ABCMeta):
-    OnError = Literal['skip', 'raise', 'warn']
-    OnParsingErrorVariants: tuple[OnError, ...] = ('skip', 'raise', 'warn')
+R = TypeVar('R')  # Data Return type
+OnError: TypeAlias = Literal['skip', 'raise', 'warn']
 
-    on_parsing_error: OnError = 'raise'
 
-    def __init__(self, on_parsing_error: OnError = 'raise') -> None:
-        print('Initializing:', self.__class__.__name__, 'Base')
-        super(BaseFileParser, self).__init__()
+@attr.define(repr=True, eq=True, kw_only=True)
+class Parser(Generic[R], metaclass=abc.ABCMeta):
+    @attr.define(repr=True, eq=True, kw_only=True)
+    class Config:
+        on_parsing_error: OnError = attr.field(
+            default='raise', kw_only=True,
+            validator=attr.validators.instance_of(str),
+        )
 
-        if on_parsing_error not in BaseFileParser.OnParsingErrorVariants:
-            raise ValueError(f'{self!r}: Unknown error handler: {on_parsing_error!r}')
+        def is_ready(self) -> bool:
+            return True
 
-        self.on_parsing_error = on_parsing_error
+    config: Config = attr.field(
+        default=attr.NOTHING,
+        factory=attr.Factory(
+            lambda self: type(self).Config(),
+            takes_self=True,
+        ),
+    )
 
-    def __repr__(self) -> str:
-        params_repr = self._get_params_repr()
-        return f'{self.__class__.__name__}({params_repr})'
+    @classmethod
+    def from_config(cls, config: Config) -> 'Parser[R]':
+        return cls(config=config)
 
-    def _get_params_repr(self) -> str:
-        return f'on_parsing_error={self.on_parsing_error!r}'
+    def configure(self, new_config: Config) -> bool:
+        self.config = attr.evolve(
+            self.config, **attr.asdict(
+                new_config,
+                filter=attr.filters.exclude(type(None)),
+            )
+        )
+        return self.config.is_ready()
 
-    def parse(self, file: pathlib.Path | IO[AnyStr], /, mode='rt', **kwargs) -> Any:
-        print(f'{self!r}: Given {file!r}')
+    def update_config(self, **kwargs) -> None:
+        self.config = attr.evolve(self.config, **kwargs)
+
+    def parse(self, file: pathlib.Path | IO[AnyStr], /, mode='rt', **kwargs) -> tuple[R, tuple[IO[R], AnyStr] | tuple]:
+        print(f'Given {file!r}')
         try:
             if isinstance(file, pathlib.Path):
                 filepath = pathlib.Path(file)
                 with filepath.open(mode, **kwargs) as file:
-                    data = self.parse_file(file)
+                    data, *_ = self._parse_file(file)
+                    return data, tuple()
             else:
-                data = self.parse_file(file)
+                return self._parse_file(file)
         except ParsingError as err:
             return self.handle_parsing_error(err)
 
-        return data
+    def _parse_file(self, file: IO[AnyStr]) -> R:
+        if not self.prepare(file):
+            raise ParserNotPrepared(f'Not ready for parsing: {self!r}')
 
-    def parse_file(self, file: IO[AnyStr]) -> Any:
-        print(f'{self!r}: Parsing')
-        data = self._parse_file(file)
+        print(f'Parsing: {self!r}')
+        data = self.parse_file(file)
+        return self.cleanup(data, file)
+
+    def prepare(self, file: IO[AnyStr], /) -> bool:
+        print(f'Preparing: {self!r}')
+        return self.config.is_ready()
+
+    @abc.abstractmethod
+    def parse_file(self, file: IO[AnyStr], /) -> Any:
+        raise NotImplementedError
+
+    def cleanup(self, data: R, file: IO[AnyStr]) -> R:
         print(f'{self!r}: Done parsing')
         return data
 
-    @abc.abstractmethod
-    def _parse_file(self, file: IO[AnyStr], /) -> Any:
-        raise NotImplementedError
-
     def handle_parsing_error(self, err: ParsingError, /) -> Any:
-        match self.on_parsing_error:
+        match self.config.on_parsing_error:
             case 'raise':
                 raise err
             case 'warn':
                 warnings.warn(err.args[0])
 
 
-BaseFileParserType = TypeVar('BaseFileParserType', bound=BaseFileParser, covariant=True)
+@attr.define(repr=True, eq=True)
+class FileParser(Parser[R], metaclass=abc.ABCMeta):
+    @attr.define(repr=True, eq=True, kw_only=True)
+    class Config(Parser.Config):
+        stepper: LineStepper = attr.field(
+            factory=LineStepper,
+            validator=attr.validators.instance_of(LineStepper),
+        )
 
+        def is_ready(self) -> bool:
+            ready = super(FileParser.Config, self).is_ready()
+            return ready and self.stepper.workable
 
-class FileParser(BaseFileParser, metaclass=abc.ABCMeta):
-    DefaultStepper: type[BaseFileStepperType] = BaseFileStepper
+    @classmethod
+    def from_stepper(cls, stepper: LineStepper) -> 'FileParser':
+        return cls(config=cls.Config(stepper=stepper))
 
-    stepper: BaseFileStepperType | None = None
-
-    def __init__(self, /, stepper: Optional[BaseFileStepperType] = None, **kwargs) -> None:
-        print('Initializing:', self.__class__.__name__, 'File', **kwargs)
-        super(FileParser, self).__init__(**kwargs)
-
-        if isinstance(stepper, self.DefaultStepper):
-            self.stepper = stepper
-        else:
-            self.stepper = self.DefaultStepper()
-
-    @abc.abstractmethod
-    def _parse_file(self, file: IO[AnyStr], /) -> Any:
+    def prepare(self, file: IO[AnyStr]) -> bool:
         self.stepper.set_file(file)
+        is_ready = super(FileParser, self).prepare(file)
+        return is_ready & self.config.is_ready()
 
-    def _get_params_repr(self) -> str:
-        base_repr = super(FileParser, self)._get_params_repr()
-        return f'stepper={self.stepper!r}, {base_repr}'
+    def cleanup(self, data: R, file: IO[AnyStr]) -> tuple[R, tuple[IO[AnyStr], str]]:
+        file, last_line = self.stepper.unset_file()
+        return data, (file, last_line)
+
+    @property
+    def stepper(self) -> LineStepper:
+        return self.config.stepper
 
 
-FileParserType = TypeVar('FileParserType', bound=FileParser, covariant=True)
+@attr.define(repr=True, eq=True, slots=True, hash=True)
+class ParserClassKey:
+    name: str = attr.field(validator=attr.validators.instance_of(str))
+    index: int = attr.field(default=0, validator=attr.validators.ge(0))
+
+    @classmethod
+    def from_parser_class(cls, parser_class: type[Parser], /, index: int = 0) -> ParserClassKey:
+        return cls(parser_class.__name__, index=index)
+
+    @classmethod
+    def convert_key(cls, key: type[Parser] | tuple[type[Parser], int] | ParserClassKey) -> ParserClassKey:
+        match key:
+            case (parser_class, int(index)) if isinstance(parser_class, Parser):
+                return cls.from_parser_class(parser_class, index)
+            case cls():
+                raise key
+            case parser_class if issubclass(parser_class, Parser):
+                return cls.from_parser_class(parser_class)
+            case _:
+                raise KeyError(f"Invalid config_key: {key!r}")
 
 
-class CompositeParser(BaseFileParser, metaclass=abc.ABCMeta):
-    def __init__(self, /, parser_parameters: dict | None = None, **kwargs) -> None:
-        print('Initializing:', self.__class__.__name__, 'CompositeParser', **kwargs)
-        super(CompositeParser, self).__init__(**kwargs)
-        self.parser_parameters = parser_parameters or {}
+@attr.define(repr=False, eq=True)
+class ParserBuilder(MutableMapping[ParserClassKey, Parser.Config]):
+    configs: dict[ParserClassKey, Parser.Config] = attr.field(
+        factory=lambda: defaultdict(dict),
+        validator=attr.validators.deep_mapping(
+            key_validator=attr.validators.instance_of(ParserClassKey),
+            value_validator=attr.validators.instance_of(Parser.Config),
+            mapping_validator=attr.validators.instance_of(dict),
+        )
+    )
 
-    def build_parser(self, parser_cls: type[BaseFileParserType], /, *args, **kwargs) -> BaseFileParserType:
-        print(f'{self!r}: Building {parser_cls.__name__!r}')
-        parser_args = self.get_parser_args(parser_cls)
-        parser_args.extend(args)
+    def __getitem__(self, key: ParserClassKey | tuple[type[Parser], int] | type[Parser]) -> Parser.Config:
+        key = ParserClassKey.convert_key(key)
+        return self.configs[key]
 
-        parser_kwargs = self.get_parser_kwargs(parser_cls)
-        parser_kwargs.update(kwargs)
-        parser = parser_cls(*parser_args, **parser_kwargs)
-        print(f'{self!r}: Done building  {parser!r}')
-        return parser
+    def __setitem__(self, key: ParserClassKey, value) -> None:
+        key = ParserClassKey.convert_key(key)
+        self.configs[key] = value
 
-    def get_parser_args(self, parser_cls: type[BaseFileParserType], /) -> list[Any]:
+    def __delitem__(self, key: ParserClassKey) -> None:
+        key = ParserClassKey.convert_key(key)
+        del self.configs[key]
+
+    def __len__(self):
+        return len(self.configs)
+
+    def __iter__(self):
+        return iter(self.configs)
+
+
+ParserType = TypeVar('ParserType', bound=Parser, covariant=True)
+
+
+@attr.define(repr=True, eq=True)
+class CompositeParser(Parser[R], metaclass=abc.ABCMeta):
+    @attr.define(repr=True, eq=True, kw_only=True)
+    class Config(Parser.Config):
+        parsers_configs: ParserBuilder = attr.Factory(ParserBuilder)
+
+    parsers: dict[ParserClassKey, Parser] = attr.Factory(dict)
+    counter: defaultdict[str, int] = attr.Factory(lambda: defaultdict(int))
+
+    def prepare(self, file: IO[AnyStr], /) -> bool:
+        is_ready = super(CompositeParser, self).prepare(file)
+        self.build_parsers()
+        return is_ready and self.config.is_ready()
+
+    def build_parsers(self) -> None:
+        for parser_cls in self.get_parser_classes():
+            config_key = self.generate_config_key(parser_cls)
+            self.build_parser(parser_cls, config_key)
+
+    def get_parser_classes(self) -> Iterable[type[Parser[R]]]:
         return []
 
-    def get_parser_kwargs(self, parser_cls: type[BaseFileParserType], /) -> dict[str, Any]:
-        kwargs = self.parser_parameters.get(parser_cls, {})
-        return kwargs
+    def generate_config_key(self, parser_class: type[Parser[R]], /) -> ParserClassKey:
+        name = parser_class.__name__
+        index = self.counter[name]
+        self.counter[name] += 1
+        config_key = ParserClassKey.from_parser_class(parser_class, index)
+        return config_key
 
-    def _get_params_repr(self) -> str:
-        base_repr = super(CompositeParser, self)._get_params_repr()
-        return f'parser_params={self.parser_parameters!r}, {base_repr}'
+    def build_parser(self, parser_class: type[ParserType[R]], /, config_key: ParserClassKey | int = 0) -> Parser[R]:
+        if isinstance(config_key, int):
+            config_key = ParserClassKey.from_parser_class(parser_class, config_key)
+
+        config = self.config.parsers_config[parser_class]
+        parser = parser_class.from_parser_class(config)
+        self.parsers[config_key] = parser
+        return parser
+
+    def run_parser(self, file: IO[AnyStr], parser: Parser[R], config_key: ParserClassKey | int = 0) -> R:
+        if isinstance(config_key, int):
+            config_key = ParserClassKey.from_parser_class(parser.__class__, config_key)
+
+        if not parser.config.is_ready():
+            self.configure_parser(parser, config_key)
+
+        data = parser.parse(file)
+        self.update_config(data, parser, config_key)
+        return data
+
+    def configure_parser(self, parser: Parser[R], config_key: ParserClassKey | int = 0) -> None:
+        if isinstance(config_key, int):
+            config_key = ParserClassKey.from_parser_class(parser.__class__, config_key)
+
+        parser_config = self.config.parsers_config[config_key]
+        parser.configure(parser_config)
+
+    def update_config(self, data: R, parser: Parser[R], config_key: ParserClassKey, /) -> None:
+        pass
 
 
-CompositeParserType = TypeVar('CompositeParserType', bound=CompositeParser, covariant=True)
+@attr.define(repr=True)
+class SequentialParser(CompositeParser[R], metaclass=abc.ABCMeta):
+    Parsers: ClassVar[list[type[Parser]]] = []
 
+    @attr.define(repr=True, eq=True, kw_only=True)
+    class Config(Parser.Config):
+        parsers_configs: ParserBuilder = attr.Factory(ParserBuilder)
 
-class SequentialParser(CompositeParser, metaclass=abc.ABCMeta):
-    Parsers: list[type[BaseFileParserType]] = []
+    storage: list[R] = attr.Factory(list)
 
-    storage = None
-    parsers = None
+    def __attrs_post_init__(self):
+        if any(not issubclass(parser_class, Parser) for parser_class in self.Parsers):
+            raise ValueError(f'Classes in {type(self).__name__} must inherit from Parser')
 
-    def __init__(self, /, **kwargs) -> None:
-        print('Initializing:', self.__class__.__name__, 'Sequential', **kwargs)
-        super(SequentialParser, self).__init__(**kwargs)
-        self.storage = []
-        self.parsers: list[BaseFileParserType] = []
-
-    def _parse_file(self, file: IO[AnyStr], /) -> Any:
-        for parser in self.build_parsers():
-            self.parsers.append(parser)
-            data = parser.parse(file)
-            self.storage.append(data)
-        return self.clear_storage()
-
-    def build_parsers(self) -> Iterable[BaseFileParserType]:
+    def get_parser_classes(self) -> Iterable[type[Parser]]:
         for parser_cls in self.Parsers:
-            yield self.build_parser(parser_cls)
+            yield parser_cls
 
-    def clear_storage(self) -> list[Any]:
-        result = []
-        result.extend(self.storage)
+    def parse_file(self, file: IO[AnyStr], /) -> Any:
+        for config_key, parser in self.parsers.items():
+            data = self.run_parser(file, parser, config_key)
+            self.storage.append(data)
+        return self.storage
+
+    def cleanup(self, data: R, file: IO[AnyStr]) -> list[R]:
+        result = data.copy()
         self.storage.clear()
         return result
-
-    def _get_params_repr(self) -> str:
-        params_repr = super(SequentialParser, self)._get_params_repr()
-        parsers_repr = ','.join(f'{p.__name__}' for p in self.Parsers)
-        storage_repr = ','.join(f'{k!r}' for k in self.storage)
-        return f'parsers=[{parsers_repr!s}], storage={storage_repr!s}, {params_repr!s}'
 
 
 Handler = Callable[[IO[AnyStr]], Any] | Callable[[], Any]
 
 
-@dataclass(frozen=True, slots=True, eq=True, repr=True)
-class ListenerSettings:
-    max_runs: int = 1
-    dispatch_file: bool = True
-    dispatch_line: bool = False
-    record_dispatches: bool = True
+@attr.define(slots=True, eq=True, repr=True)
+class ListenerConfig:
+    max_runs: int = attr.field(default=1, validator=attr.validators.instance_of(int))
+    dispatch_file: bool = attr.field(default=True, validator=attr.validators.instance_of(bool))
+    dispatch_line: bool = attr.field(default=False, validator=attr.validators.instance_of(bool))
+    record_dispatches: bool = attr.field(default=True, validator=attr.validators.instance_of(bool))
 
-
-@dataclass
-class Listener:
-    label: str | Resources
-
-    anchor: Anchor
-    handle: Handler
-    predicate: Predicate
-
-    settings: ListenerSettings = field(default_factory=ListenerSettings)
-
-    dispatch_offsets: list[int] = field(default_factory=list, init=False)
-    was_dispatched: bool = field(default=False, init=False)
-
-    def __post_init__(self):
-        if 0 <= self.settings.max_runs:
+    def __attrs_post_init__(self):
+        if 0 <= self.max_runs:
             self.record_dispatches = True
 
-    def run(self, stepper: BaseFileStepperType) -> Any:
+
+@attr.define(slots=True, eq=True, repr=False)
+class Listener:
+    label: str = attr.field(validator=attr.validators.instance_of(str))
+
+    handle: Handler = attr.field(validator=attr.validators.is_callable())
+    predicate: Predicate = attr.field(validator=attr.validators.is_callable())
+
+    config: ListenerConfig
+
+    anchor: Anchor | None = attr.field(
+        default=None,
+        validator=attr.validators.optional([
+            attr.validators.instance_of(str),
+            attr.validators.instance_of(bytes),
+        ])
+    )
+
+    dispatch_offsets: list[int] = attr.field(factory=list, init=False)
+    was_dispatched: bool = attr.field(
+        default=False,
+        init=False,
+        validator=attr.validators.instance_of(bool),
+    )
+
+    def run(self, stepper: LineStepper) -> Any:
         print(f'{self!r}: Handling {stepper!r}')
 
         self.was_dispatched = True
-        if self.record_dispatches:
+        if self.config.record_dispatches:
             self.record_dispatch(stepper)
 
         args = []
-        if self.settings.dispatch_file:
+        if self.config.dispatch_file:
             args.append(stepper.file)
 
-        if self.settings.dispatch_line:
+        if self.config.dispatch_line:
             args.append(stepper.line)
 
         data = self.handle(*args)
         print(f'{self!r}: Done handling {stepper!r}')
         return data
 
-    def record_dispatch(self, stepper: BaseFileStepperType, /) -> None:
-        self.dispatch_offsets.append(stepper.offset)
+    def record_dispatch(self, stepper: LineStepper, /) -> None:
+        self.dispatch_offsets.append(stepper.line_offset)
 
     @property
     def is_active(self) -> bool:
-        return not (0 <= self.settings.max_runs <= self.n_runs)
+        return not (0 <= self.config.max_runs <= self.n_runs)
 
     @property
     def n_runs(self) -> int | None:
-        return len(self.dispatch_offsets) if self.record_dispatches else None
+        return len(self.dispatch_offsets) if self.config.record_dispatches else None
 
     def __repr__(self) -> str:
-        max_runs = self.settings.max_runs
-        if self.record_dispatches:
+        max_runs = self.config.max_runs
+        if self.config.record_dispatches:
             dispatched = f'{self.n_runs}' + f'/{max_runs}' if max_runs > -1 else ''
         else:
             dispatched = '>= 1' if self.was_dispatched else '0'
@@ -256,29 +376,27 @@ class Listener:
 Listeners = deque[Listener]
 
 
-class DispatchFileParser(FileParser, metaclass=abc.ABCMeta):
-    active_listeners = None
-    inactive_listeners = None
-    storage = None
+@attr.define(repr=True, eq=True)
+class DispatchFileParser(FileParser[R], metaclass=abc.ABCMeta):
+    active_listeners: deque[Listener] | None = attr.field(
+        default=None,
+        validator=attr.validators.optional(
+            attr.validators.deep_iterable(
+                member_validator=attr.validators.instance_of(Listener),
+                iterable_validator=attr.validators.instance_of(deque),
+            )))
+    inactive_listeners: list[Listener] = attr.Factory(list)
+    storage: defaultdict[str, list[R]] = attr.Factory(lambda: defaultdict(list))
 
-    def __init__(self, /, **kwargs) -> None:
-        print('Initializing:', self.__class__.__name__, 'DispatchFileParser', **kwargs)
-        super(DispatchFileParser, self).__init__(**kwargs)
-        self.storage = {}
-        self.inactive_listeners: list[Listener] = []
-        self.active_listeners = self.build_listeners()
-
-    def _get_params_repr(self) -> str:
-        params_repr = super(DispatchFileParser, self)._get_params_repr()
-        active_repr = ','.join(f'{p!r}' for p in self.active_listeners) if self.active_listeners else None
-        inactive_repr = ','.join(f'{p!r}' for p in self.inactive_listeners) if self.inactive_listeners else None
-        return f'active=[{active_repr!s}], inactive=[{inactive_repr!s}], {params_repr!s}'
+    def prepare(self, file: IO[AnyStr]) -> bool:
+        super(DispatchFileParser, self).prepare(file)
+        self.build_listeners()
 
     def dispatch(self, line: AnyStr, /) -> bool:
         n_to_listen = len(self.active_listeners)
         while n_to_listen > 0 and (listener := self.active_listeners.pop()):
             if listener.predicate(line):
-                self.storage[listener.label] = listener.run(self.stepper)
+                self.storage[listener.label].append(listener.run(self.stepper))
 
             if listener.is_active:
                 self.active_listeners.appendleft(listener)
@@ -294,9 +412,8 @@ class DispatchFileParser(FileParser, metaclass=abc.ABCMeta):
         print(f'{self!r}: Done dispatching')
         return data
 
-    def clear_storage(self) -> dict:
-        result = {}
-        result.update(self.storage)
+    def cleanup(self, data: R, file: IO[AnyStr]) -> list[R]:
+        result = data.copy()
         self.storage.clear()
         return result
 
@@ -308,34 +425,31 @@ class DispatchFileParser(FileParser, metaclass=abc.ABCMeta):
     def has_active_listeners(self) -> bool:
         return len(self.active_listeners) > 0
 
-    @abc.abstractmethod
-    def build_listeners(self) -> deque[Listener]:
+    def build_listeners(self):
         pass
 
-    def _parse_file(self, file: IO[AnyStr]) -> Any:
-        super(DispatchFileParser, self)._parse_file(file)
-        self.execute_dispatch()
-        return self.clear_storage()
+    def parse_file(self, file: IO[AnyStr]) -> R:
+        return self.execute_dispatch()
 
 
-@dataclass(frozen=True, repr=True, slots=True)
+@attr.define(attr=True, slots=True, repr=True)
 class Task:
-    anchor: Anchor
-    handle: str
-    settings: ListenerSettings = field(default_factory=ListenerSettings)
-    func_kwargs: dict[str, Any] = field(default_factory=dict)
+    anchor: Anchor = attr.field(validator=)
+    handle: str = attr.field(validator=attr.validators.instance_of(str))
+    settings: ListenerConfig = field(default_factory=ListenerConfig)
+    handle_kwargs: dict[str, Any] = field(default_factory=dict)
 
-    def get_listener(self, label: str | Resources, stepper: BaseFileStepperType, /) -> Listener:
+    def get_listener(self, label: str | Resources, stepper: LineStepper, /) -> Listener:
         handle = getattr(stepper, self.handle)
-        if self.func_kwargs:
-            handle = partial(handle, **self.func_kwargs)
+        if self.handle_kwargs:
+            handle = partial(handle, **self.handle_kwargs)
 
         return Listener(
             label=label,
             anchor=self.anchor,
-            predicate=stepper.get_predicate(self.anchor),
+            predicate=stepper.get_str_predicate(self.anchor),
             handle=handle,
-            settings=self.settings
+            config=self.settings,
         )
 
 

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from parsing.core import BaseFileStepper
+from parsing.core import LineStepper
 
 
-class LogStepper(BaseFileStepper):
+class LogStepper(LineStepper):
     N_COLUMNS_PER_BLOCK: int = 5
 
     def read_square_matrix(self, dtype=np.float_) -> np.ndarray:
