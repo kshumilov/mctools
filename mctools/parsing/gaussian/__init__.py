@@ -1,3 +1,3 @@
-# from .fchk import *
-from .log import *
-# from .rwfdump import *
+from __future__ import annotations
+
+from parsing.gaussian.log import *

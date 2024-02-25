@@ -10,13 +10,12 @@ from typing import TextIO, Callable, TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
-from parsing.gaussian.log.route import Link
+from parsing.gaussian.log.route.route import Link, RouteLine
 from parsing.gaussian.log.utils import read_matrix_in_file
 from parsing.core import ProcessedPattern, DIMS_MAP
 from parsing import search_in_file
 
 if TYPE_CHECKING:
-    from parsing.gaussian.log.route import RouteLine
     from parsing.core.pattern import ParsingResultType
 
 __all__ = [

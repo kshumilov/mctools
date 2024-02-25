@@ -1,33 +1,53 @@
 from __future__ import annotations
 
-from core import Resources
-from parsing.core import Task, ListenerConfig
-from .parser import LinkParser
+from typing import ClassVar
+
+import attr
+
+from core.resource import Resource
+
+from parsing.core.parser.dict import Listener
+
+from parsing.gaussian.log.links.base import LinkParser, RealMatrixParser
 
 __all__ = [
     'L302Parser',
 ]
 
 
+@attr.define(eq=True, repr=True)
 class L302Parser(LinkParser):
-    ANCHORS_STV = ('Overlap', 'Kinetic', 'Core Hamiltonian')
-    ANCHORS_X2C = ('Veff (p space)', 'Trel (r space)', 'Veff (r space)',
-                   'SO unc.', 'DK / X2C integrals',
-                   'Orthogonalized basis functions')
+    PARSABLE_RESOURCES: ClassVar[Resource] = Resource.STV()
 
-    DEFAULT_RESOURCES = Resources.ao_int1e_stv
-    DEFAULT_TASKS = {
-        resource: Task(
+    ANCHORS_STV = (
+        'Overlap',
+        'Kinetic',
+        'Core Hamiltonian'
+    )
+
+    ANCHORS_X2C = (
+        'Veff (p space)',
+        'Trel (r space)',
+        'Veff (r space)',
+        'SO unc.',
+        'DK / X2C integrals',
+        'Orthogonalized basis functions'
+    )
+
+    DEFAULT_LISTENERS = {
+        resource: Listener(
+            parser=RealMatrixParser(),
             anchor=anchor,
-            handle='read_square_matrix',
-            settings=ListenerConfig(dispatch_file=False)
+            label=resource,
+            max_runs=1
         )
-        for resource, anchor in zip(Resources.ao_int1e_stv, ANCHORS_STV)
+        for resource, anchor in
+        zip(Resource.STV(), ANCHORS_STV)
     }
 
-    def parse_iops(self, requested_resources: Resources, /) -> Resources:
-        if self.iops.get(33) in (1, 5):
-            requested_resources &= Resources.ao_int1e_stv
-        else:
-            requested_resources ^= Resources.ao_int1e_stv
-        return requested_resources
+    def postprocess(self, raw_data):
+        data = {}
+        for resource, resource_result in raw_data.items():
+            if resource in list(self.PARSABLE_RESOURCES):
+                data[resource] = resource_result.pop()
+        return super().postprocess(data)

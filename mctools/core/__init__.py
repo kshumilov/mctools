@@ -1,4 +1,3 @@
-from .resources import *
 from .mcspace import *
 from .mcstates import *
 from .mctransitions import *

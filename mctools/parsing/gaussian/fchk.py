@@ -11,7 +11,8 @@ import pandas as pd
 from numpy import ndarray, dtype
 
 from core import Molecule, Basis
-from parsing.core import FileStepper, FileParser, LineStepper
+from parsing.core import FileStepper, LineStepper
+from parsing.core.parser import FileParser
 from parsing.core.pattern import ProcessedPattern, simple_float_tmplt, simple_int_tmplt
 
 
@@ -227,16 +228,16 @@ class FchkParser(FileParser):
 
         return molorb
 
-    def parse_file(self, file: IO[AnyStr]) -> Any:
+    def parse_file(self, state: IO[AnyStr]) -> Any:
         header = self.read_description()
 
     def assign_task(self, option: FchkParserOptions) -> Optional[callable | tuple[callable, str]]:
         match option:
             case self.options_cls.header:
                 return self.read_description
-            case self.options_cls.charge:
+            case self.options_cls.mol_charge:
                 return partial(self.stepper.read_scalar, 'Charge'), f'{self.stepper.read_scalar.__name__}'
-            case self.options_cls.multiplicity:
+            case self.options_cls.mol_multiplicity:
                 return partial(self.stepper.read_scalar, 'Multiplicity'), f'{self.stepper.read_scalar.__name__}'
             case self.options_cls.n_elec_a:
                 return partial(self.stepper.read_scalar, 'Number of alpha electrons'), f'{self.stepper.read_scalar.__name__}'
@@ -266,12 +267,12 @@ class FchkParser(FileParser):
                 data = result.pop(option)
                 match option:
                     case self.options_cls.molecular_geometry:
-                        charge = processed_result.pop(self.options_cls.charge)
-                        multiplicity = processed_result.pop(self.options_cls.multiplicity)
+                        charge = processed_result.pop(self.options_cls.mol_charge)
+                        multiplicity = processed_result.pop(self.options_cls.mol_multiplicity)
                         processed_result[option] = Molecule(
                             data,
                             charge=charge, multiplicity=multiplicity,
-                            source=self.stepper.file.name,
+                            source=self.stepper_class.fwp.parser_class,
                         )
                     case self.options_cls.basis:
                         molecule = processed_result.pop(self.options_cls.molecular_geometry)

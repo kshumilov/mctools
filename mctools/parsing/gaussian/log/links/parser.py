@@ -1,87 +1,90 @@
 from __future__ import annotations
 
-import abc
+from collections import defaultdict
+from typing import ClassVar, Any, AnyStr, TypeAlias, TYPE_CHECKING
 
-from typing import TypeVar
+import attrs
 
-import attr
+from core.resource import Resource
 
-from core.resources import Resources
+from parsing.core.parser.base import Parser
+from parsing.core.parser.list import SequentialParser
+from parsing.gaussian.log.route.route import Route, Link
 
-from parsing.core.error import ParsingError
-from parsing.core.stepper import Predicate
-from parsing.core.parser import Listener, TaskFileParser, ListenerConfig
+if TYPE_CHECKING:
+    from parsing.gaussian.log.links.base import LinkParser
+    from parsing.core.filehandler import FileWithPosition
 
-from .stepper import LogStepper
-from ..route import Link, IOps
+    F: TypeAlias = FileWithPosition[AnyStr]
+
 
 __all__ = [
-    'LinkParser', 'LinkParserType',
+    'LinksParser',
 ]
 
 
-class LinkParser(TaskFileParser, metaclass=abc.ABCMeta):
-    LINK_ANCHOR_TEMPLATE: str = '%s.exe'
-    TERMINATION_ANCHOR: str = 'Leave Link'
+D: TypeAlias = list[dict[Resource, Any]]
+R: TypeAlias = dict[Resource, list[Any]]
 
-    @attr.define(repr=True, eq=True, kw_only=True)
-    class Config(TaskFileParser.Config):
-        iops: IOps | None = attr.field(
-            default=None,
-            validator=attr.validators.optional(
-                attr.validators.deep_mapping(
-                    key_validator=attr.validators.instance_of(int),
-                    value_validator=attr.validators.instance_of(int),
-                )
-            )
+
+@attrs.define(repr=True, eq=True)
+class LinksParser(Parser[R, AnyStr]):
+    DEFAULT_LINK_PARSER_CLASSES: ClassVar[dict[Link, type[LinkParser]]] = {}
+
+    requested: Resource = attrs.field(
+        factory=Resource.ALL,
+        validator=attrs.validators.instance_of(Resource),
+    )
+
+    include_links: defaultdict[Link, int] = attrs.field(
+        factory=lambda: defaultdict(lambda: int(1)),
+        converter=lambda v: defaultdict(lambda: int(1), v),
+        validator=attrs.validators.deep_mapping(
+            key_validator=attrs.validators.instance_of(Link),
+            value_validator=attrs.validators.instance_of(int),
+            mapping_validator=attrs.validators.instance_of(defaultdict)
         )
+    )
 
-        def is_ready(self) -> bool:
-            return self.iops is not None
+    route: Route = attrs.field(default=attrs.Factory(Route))
 
-    # def __init__(self, iops: IOps, /, **kwargs) -> None:
-    #     # Before super, because used by ResourceHandler.get_resources(),
-    #     self.iops = iops
-    #     super(LinkParser, self).__init__(**kwargs)
+    link_parsers: SequentialParser = attrs.field(factory=SequentialParser)
+    links_parsed: list[Link] = attrs.field(factory=list, init=False)
 
-    @property
-    def link(self) -> Link:
-        name = self.__class__.__name__[:-len('Parser')]
-        return Link[name]
+    def is_ready(self) -> bool:
+        return (self.route.is_complete and
+                super(LinksParser, self).is_ready())
 
-    @property
-    def anchor(self) -> str:
-        return self.LINK_ANCHOR_TEMPLATE % self.link.value
+    def prepare(self, file: F, /) -> None:
+        super(LinksParser, self).prepare(file)
+        self.build_parsers()
 
-    def get_resources(self, requested_resources: Resources, /) -> Resources:
-        requested_resources = super(LinkParser, self).get_resources(requested_resources)
-        return self.parse_iops(requested_resources)
+    def build_parsers(self) -> None:
+        for link, iops, available in self.route.get_available_resources():
+            if link_parser_class := self.DEFAULT_LINK_PARSER_CLASSES.get(link):
+                resources = Resource(available & link_parser_class.PARSABLE_RESOURCES)
+                if resources != Resource.NONE() and self.include_links[link] > 0:
+                    link_parser = link_parser_class(
+                        resources=resources,
+                        iops=iops
+                    )
+                    self.link_parsers.add_parser(link_parser)
+                    self.links_parsed.append(link)
+                    self.include_links[link] -= 1
 
-    @abc.abstractmethod
-    def parse_iops(self, requested_resources: Resources, /) -> Resources:
-        return self.DEFAULT_RESOURCES
+    def parse_file(self, fwp: F, /) -> tuple[D, F]:
+        return self.link_parsers.parse(fwp)
 
-    def execute_dispatch(self) -> bool:
-        print(f'{self!r}: Dispatching')
-        until = self.stepper.get_str_predicate(self.TERMINATION_ANCHOR)
-        if not self.stepper.step_to_first(self.dispatch, until) and self.total_dispatches == 0:
-            raise ParsingError(f'{self!r}: Did not find any anchors')
-        print(f'{self!r}: Done dispatching')
-        return True
+    def postprocess(self, raw_data: D) -> R:
+        results = {}
+        for link, link_result in zip(self.links_parsed, raw_data):
+            for resource, result in link_result.items():
+                results[resource] = result
+        return super(LinksParser, self).postprocess(results)
 
-    def get_link_predicate(self) -> Predicate:
-        return self.stepper.get_str_predicate(self.anchor)
+    def __len__(self) -> int:
+        return len(self.link_parsers)
 
-    def get_link_listener(self) -> Listener:
-        return Listener(
-            label=self.link,
-            anchor=self.anchor,
-            predicate=self.get_link_predicate(),
-            handle=self.parse,
-            config=ListenerConfig(
-                dispatch_file=True,
-            )
-        )
-
-
-LinkParserType = TypeVar('LinkParserType', bound=LinkParser, covariant=True)
+    @classmethod
+    def register(cls, link: Link, parser_class: type[LinkParser]) -> None:
+        cls.DEFAULT_LINK_PARSER_CLASSES[link] = parser_class

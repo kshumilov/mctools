@@ -17,7 +17,7 @@ from parsing import search_in_file
 
 from parsing.gaussian.log.utils import parse_gdvlog
 
-from parsing.gaussian.log.links.l910 import (
+from parsing.gaussian.log.links.oldl910 import (
     rdm_real_patt, rdm_imag_patt,
     read_mc_spec
 )

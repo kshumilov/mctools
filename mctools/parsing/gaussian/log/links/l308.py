@@ -6,12 +6,11 @@ from typing import TextIO, Callable, TYPE_CHECKING
 
 import numpy as np
 
-from parsing.gaussian.log.route import Link
+from parsing.gaussian.log.route.route import Link, RouteLine
 from parsing.gaussian.log.utils import read_matrix_in_file
 from parsing import search_in_file
 
 if TYPE_CHECKING:
-    from parsing.gaussian.log.route import RouteLine
     from parsing.core.pattern import ParsingResultType
 
 __all__ = [

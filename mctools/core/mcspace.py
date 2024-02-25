@@ -327,7 +327,7 @@ class MCSpace:
             blocks[label] = tuple(sorted(occ_list))
 
         s = pd.Series(blocks, name=self.MO_ORB_COL)
-        s.index.name = self.MO_BLOCK_IDX_NAME
+        s.index.parser_class = self.MO_BLOCK_IDX_NAME
         return s
 
     def transform_mo_blocks(self, blocks: MOBlocks, /) -> pd.DataFrame:

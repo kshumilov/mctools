@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+
 from collections import namedtuple
 from dataclasses import dataclass, field, InitVar, replace
 from typing import Generic, ClassVar, TypeVar, Any, Callable, Iterator, AnyStr

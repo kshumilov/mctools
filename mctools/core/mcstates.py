@@ -574,7 +574,7 @@ class MCStates(Consolidator):
         self.clear_properties()
         self._df.iloc[key, self.DEFAULT_COLS] = other._df[self.DEFAULT_COLS]
         self._df.reset_index(drop=True, inplace=True)
-        self._df.index.name = self.IDX_NAME
+        self._df.index.parser_class = self.IDX_NAME
 
         self.rdm_diags[self._state_map[key]] = other.rdm_diags
 
@@ -601,7 +601,7 @@ class MCStates(Consolidator):
         left_states = self._state_map[preserve_key]
 
         self._df.reset_index(drop=True, inplace=True)
-        self._df.index.name = self.IDX_NAME
+        self._df.index.parser_class = self.IDX_NAME
 
         # TODO: try to use vstack
         found_lil = sparse.isspmatrix_lil(self.ci_vecs)
