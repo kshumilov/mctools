@@ -27,6 +27,9 @@ __all__ = [
 FWP: TypeAlias = FileWithPosition[AnyStr]
 I: TypeAlias = pathlib.Path | IO[AnyStr] | FWP[AnyStr]
 Result = TypeVar('Result', covariant=True)  # Data from parse() type
+Success: TypeAlias = tuple[Result, FWP[AnyStr]]
+Failure: TypeAlias = tuple[None, FWP[AnyStr]]
+ReturnType: TypeAlias = Success | Failure
 
 
 @attrs.define(repr=True, eq=True)
@@ -38,7 +41,7 @@ class Parser(Generic[Result, AnyStr], metaclass=abc.ABCMeta):
         validator=attrs.validators.in_(['skip', 'raise', 'warn'])
     )
 
-    def parse(self, filelike: IO[AnyStr] | FWP[AnyStr], /) -> tuple[None, FWP[AnyStr]] | tuple[Result, FWP[AnyStr]]:
+    def parse(self, filelike: IO[AnyStr] | FWP[AnyStr], /) -> ReturnType[Result, AnyStr]:
         match filelike:
             case io.IOBase() as file:
                 fwp = FileWithPosition(file)
@@ -48,7 +51,7 @@ class Parser(Generic[Result, AnyStr], metaclass=abc.ABCMeta):
             case _:
                 raise ValueError('Invalid file')
 
-    def _parse_file(self, file: FWP[AnyStr]) -> tuple[None, FWP[AnyStr]] | tuple[Result, FWP[AnyStr]]:
+    def _parse_file(self, file: FWP[AnyStr]) -> ReturnType[Result, AnyStr]:
         try:
             self.prepare(file)
             data, file = self.parse_file(file)
@@ -81,8 +84,6 @@ class Parser(Generic[Result, AnyStr], metaclass=abc.ABCMeta):
                 warnings.warn(err.args[0])
         return None, file
 
-
-# P: Type[Parser] = Parser[Result, AnyStr]
 
 Args = ParamSpec('Args')
 Func = Callable[Concatenate[FWP[AnyStr], Args], tuple[Any, FWP[AnyStr]]]

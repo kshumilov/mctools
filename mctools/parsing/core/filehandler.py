@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from typing import Generic, AnyStr, IO
+from typing import Generic, AnyStr, IO, TypeGuard, TypeVar, Type
 
 import attrs
 
@@ -9,6 +9,9 @@ import attrs
 __all__ = [
     'FileWithPosition',
     'FileHandler',
+
+    'is_handler_type',
+    'is_fwp_binary',
 
     'DoesNotHaveAFile',
     'AlreadyHasFile',
@@ -29,12 +32,12 @@ class FileWithPosition(Generic[AnyStr]):
 
     @last_line.default
     def _get_last_line(self) -> str | bytes:
-        if self.is_binary:
+        if 'b' in self.file.mode:
             return b''
         return ''
 
-    @file.validator  # type: ignore
-    def _validate_file(self, attribute: attrs.Attribute, value: IO[AnyStr]) -> None:
+    @file.validator
+    def _validate_file(self, attribute: attrs.Attribute, value: IO[AnyStr]) -> None:  # type: ignore[type-arg]
         if value.closed:
             raise ValueError('File must be open, readable, and seekable')
 
@@ -52,17 +55,9 @@ class FileWithPosition(Generic[AnyStr]):
             self.last_line = type(self.last_line)()
         return new_offset != 0
 
-    @property
-    def is_binary(self) -> bool:
-        return 'b' in self.file.mode
 
-    # @property
-    # def is_parsable(self) -> bool:
-    #     try:
-    #         attrs.validate(self)  # mypy: ignore
-    #         return True
-    #     except ValueError:
-    #         return False
+def is_fwp_binary(fwp: FileWithPosition[AnyStr]) -> TypeGuard[FileWithPosition[bytes]]:
+    return 'b' in fwp.file.mode
 
 
 class FileHandlingError(Exception):
@@ -94,7 +89,7 @@ class FileHandler(Generic[AnyStr]):
         if self.fwp is not None:
             raise AlreadyHasFile()
 
-        attrs.validate(fwp)  # type: ignore
+        attrs.validate(fwp)
         self.fwp = fwp
 
     def take_from(self, other: FileHandler[AnyStr], /) -> None:
@@ -102,7 +97,7 @@ class FileHandler(Generic[AnyStr]):
             raise AlreadyHasFile()
 
         fwp = other.return_file()
-        attrs.validate(fwp)  # type: ignore
+        attrs.validate(fwp)
         self.fwp = fwp
 
     def return_file(self, /) -> FileWithPosition[AnyStr]:
@@ -111,3 +106,12 @@ class FileHandler(Generic[AnyStr]):
 
         fwp, self.fwp = self.fwp, None
         return fwp
+
+
+_T = TypeVar("_T")
+
+
+def is_handler_type(handler: FileHandler[AnyStr], line_type: Type[_T]) -> TypeGuard[FileHandler[_T]]:
+    if handler.fwp is not None:
+        return isinstance(handler.fwp.last_line, line_type)
+    raise DoesNotHaveAFile('Cannot find handler type without a file.')

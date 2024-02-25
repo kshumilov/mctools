@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import warnings
-from typing import AnyStr, Literal, TypeAlias, Callable
+from typing import AnyStr, Literal, TypeAlias, Callable, reveal_type, TypeVar
 
 import attrs
 
-from .filehandler import FileHandler, DoesNotHaveAFile
+from .filehandler import FileHandler, DoesNotHaveAFile, is_handler_type
 from .error import EOFReached, TerminatorReached
 
 
@@ -21,6 +21,21 @@ __all__ = [
 OnError: TypeAlias = Literal['raise', 'skip', 'warn']
 Anchor: TypeAlias = AnyStr
 Predicate: TypeAlias = Callable[[AnyStr], bool]
+PredicateFactory: TypeAlias = Callable[[AnyStr], Predicate[AnyStr]]
+
+
+def build_in_predicate(anchor: AnyStr) -> Predicate[AnyStr]:
+    def predicate(line: AnyStr) -> bool:
+        return anchor in line
+
+    return predicate
+
+
+def build_startswith_predicate(anchor: AnyStr) -> Predicate[AnyStr]:
+    def predicate(line: AnyStr) -> bool:
+        return line.startswith(anchor)
+
+    return predicate
 
 
 @attrs.define(repr=True)
@@ -104,16 +119,17 @@ class LineStepper(FileHandler[AnyStr]):
             case 'warn':
                 warnings.warn('Terminator reached')
 
-    def get_anchor_predicate(self, anchor: str | None) -> Callable[[AnyStr], bool]:
-        if self.fwp.is_binary:
-            anchor = anchor.encode('utf-8')
-
-        if anchor is None:
-            return lambda line: False  # Always False
-        elif isinstance(anchor, (str, bytes)):
-            return lambda line: anchor in line
+    def get_anchor_predicate(
+            self, anchor: str, /,
+            func: PredicateFactory[AnyStr] = build_in_predicate
+    ) -> Predicate[str] | Predicate[bytes]:
+        if is_handler_type(self, bytes):
+            return func(anchor.encode('utf-8'))
+        elif is_handler_type(self, str):
+            return func(anchor)
         else:
-            raise ValueError(f"Invalid anchor: {anchor!r}")
+            raise ValueError(f'Unrecognized handler type: {self!r}')
+
 
     # def findall(self, target: Anchor, /, *, check_last_read: bool = False) -> list[AnyStr]:
     #     target_in = self.get_str_predicate(target)
