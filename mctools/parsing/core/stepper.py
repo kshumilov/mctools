@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import AnyStr, Literal, TypeAlias, Callable, reveal_type, TypeVar
+from typing import AnyStr, Literal, TypeAlias, Callable
 
 import attrs
 
@@ -13,13 +13,11 @@ __all__ = [
     'LineStepper',
     'OnError',
 
-    'Anchor',
     'Predicate',
 ]
 
 
 OnError: TypeAlias = Literal['raise', 'skip', 'warn']
-Anchor: TypeAlias = AnyStr
 Predicate: TypeAlias = Callable[[AnyStr], bool]
 PredicateFactory: TypeAlias = Callable[[AnyStr], Predicate[AnyStr]]
 
@@ -40,6 +38,10 @@ def build_startswith_predicate(anchor: AnyStr) -> Predicate[AnyStr]:
 
 @attrs.define(repr=True)
 class LineStepper(FileHandler[AnyStr]):
+    @property
+    def is_file_binary(self) -> bool:
+        return is_handler_type(self, bytes)
+
     def readline(self, /) -> AnyStr:
         if self.fwp is not None:
             self.fwp.forward()

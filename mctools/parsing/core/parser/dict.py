@@ -5,9 +5,9 @@ from typing import TypeVar, Hashable, AnyStr, TypeAlias, Generic, Any, ClassVar
 
 import attrs
 
-from ..error import AnchorNotFound
+from ..error import AnchorNotFound, ParserNotPrepared
 from .base import Parser
-from ..stepper import LineStepper, Anchor, Predicate
+from ..stepper import LineStepper, Predicate
 from ..filehandler import FileWithPosition
 
 __all__ = [
@@ -30,19 +30,19 @@ class Listener(Parser[R, AnyStr], Generic[Label, R, AnyStr]):
         )
     )
 
-    anchor: AnyStr | None = attrs.field(
-        default=None,
-        validator=attrs.validators.optional([
-            attrs.validators.instance_of((str, bytes)),
-        ]),
-    )
+    # anchor: AnyStr | None = attrs.field(
+    #     default=None,
+    #     validator=attrs.validators.optional([
+    #         attrs.validators.instance_of((str, bytes)),
+    #     ]),
+    # )
 
-    predicate: Predicate[AnyStr] | None = attrs.field(
-        default=None,
-        validator=attrs.validators.optional(
-            attrs.validators.is_callable(),
-        )
-    )
+    # predicate: Predicate[AnyStr] | None = attrs.field(
+    #     default=None,
+    #     validator=attrs.validators.optional(
+    #         attrs.validators.is_callable(),
+    #     )
+    # )
 
     label: Label | None = attrs.field(
         validator=attrs.validators.optional(
@@ -59,14 +59,14 @@ class Listener(Parser[R, AnyStr], Generic[Label, R, AnyStr]):
 
     @label.default
     def _get_default_label(self) -> Label | None:
-        if self.anchor is not None:
-            return str(self.anchor)
+        # if self.anchor is not None:
+        #     return str(self.anchor)
 
         if self.parser is not None:
             return type(self.parser).__name__
 
-        if self.predicate is not None:
-            return self.predicate.__name__
+        # if self.predicate is not None:
+        #     return self.predicate.__name__
 
         return None
 
@@ -76,15 +76,17 @@ class Listener(Parser[R, AnyStr], Generic[Label, R, AnyStr]):
     #         return LineStepper().get_anchor_predicate(self.anchor)
     #     return None
 
-    def is_ready(self) -> bool:
-        return (super(Listener, self).is_ready() and
-                self.parser is not None and
-                self.predicate is not None and
-                self.label is not None)
+    # def is_ready(self) -> bool:
+    #     return (super(Listener, self).is_ready() and
+    #             self.parser is not None and
+    #             self.predicate is not None and
+    #             self.label is not None)
 
-    def parse_file(self, fwp: F, /) -> tuple[Any, F]:
+    def parse_file(self, fwp: F, /) -> tuple[R, F]:
         self.record_dispatch(fwp)
-        return self.parser.parse(fwp)
+        if self.parser is not None:
+            return self.parser.parse(fwp)
+        raise ParserNotPrepared('Parser is not defined')
 
     def record_dispatch(self, file: F, /) -> None:
         self.dispatch_offsets.append(file.n_lines_read)

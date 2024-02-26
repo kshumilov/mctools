@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pathlib
-import re
 from collections import defaultdict
 
 from enum import unique, StrEnum, auto
@@ -79,33 +77,6 @@ class RouteLine(MutableMapping[int, int]):
     def links(self) -> tuple[Link, ...]:
         return tuple([Link(f'l{self.start * 100 + end}') for end in self.ends])
 
-    @classmethod
-    def is_valid_route_line(cls, line: str) -> bool:
-        return cls.RouteLinePattern.match(line) is not None
-
-    @classmethod
-    def from_route_line(cls, line: str) -> RouteLine | None:
-        if cls.is_valid_route_line(line):
-            return cls.parse_route_line(line)
-
-    @classmethod
-    def parse_route_line(cls, line: str) -> RouteLine | None:
-        line = line.strip().strip(';')
-
-        start: int
-        start, params, ends, *step = list(filter(None, re.split(r'[/()]', line)))
-
-        start = int(start)
-        params = {k: v for k, v in map(lambda p: tuple(map(int, p.split('='))), params.split(','))}
-        ends = [int(e) for e in ends.split(',')]
-        match step:
-            case [step]:
-                step = int(step)
-            case []:
-                step = 0
-
-        return RouteLine(start=start, ends=ends, iops=params, steps=step)
-
 
 @attrs.define(repr=True, eq=True, slots=True)
 class Route:
@@ -152,20 +123,6 @@ class Route:
     def is_complete(self) -> bool:
         return Link.L9999 in self.links
 
-    @classmethod
-    def from_log(cls, filename: str | pathlib.Path) -> 'Route':
-        logfile = pathlib.Path(filename)
-        with logfile.open(mode="r") as file:
-            route = cls()
-            for line in file:
-                if line.startswith(' Leave'):
-                    break
-
-                if route_line := RouteLine.from_route_line(line):
-                    route.append(route_line)
-
-        return route
-
     def get_available_resources(self) -> Sequence[tuple[Link, IOps, Resource]]:
         available: list[tuple[Link, IOps, Resource]] = []
         for link, iops in self:
@@ -194,7 +151,7 @@ class Route:
         resources = Resource.NONE()
 
         if iops[17] > 0:
-            resources |= Resource.ci_energy
+            resources |= Resource.ci_energy | Resource.ci_vecs
 
         if iops[18] > 0:
             resources |= Resource.ci_saweights

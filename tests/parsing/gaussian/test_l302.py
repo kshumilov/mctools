@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 
 from parsing.core import DispatchParser
-from parsing.gaussian.log.links.base import RealMatrixParser
+from parsing.gaussian.log.links.base import MatrixParser
 
 
 class TestInt1eParsing:
@@ -11,7 +11,7 @@ class TestInt1eParsing:
         shape = (575, 575)
 
         l302parser = DispatchParser()
-        l302parser.build_listener_from_parser('Overlap', RealMatrixParser(), max_runs=1)
+        l302parser.build_listener_from_parser('Overlap', MatrixParser(), max_runs=1)
         data = l302parser.parse(logname)
 
         assert target in data
@@ -27,7 +27,7 @@ class TestInt1eParsing:
 
         targets = ['Overlap', 'Kinetic', 'Core Hamiltonian']
         for target in targets:
-            l302parser.build_listener_from_parser(target, RealMatrixParser(), max_runs=1)
+            l302parser.build_listener_from_parser(target, MatrixParser(), max_runs=1)
 
         data = l302parser.parse(logname)
 

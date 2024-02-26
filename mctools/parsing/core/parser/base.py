@@ -34,8 +34,6 @@ ReturnType: TypeAlias = Success | Failure
 
 @attrs.define(repr=True, eq=True)
 class Parser(Generic[Result, AnyStr], metaclass=abc.ABCMeta):
-    D = TypeVar('D')
-
     on_parsing_error: OnError = attrs.field(
         default='raise',
         validator=attrs.validators.in_(['skip', 'raise', 'warn'])
@@ -53,30 +51,21 @@ class Parser(Generic[Result, AnyStr], metaclass=abc.ABCMeta):
 
     def _parse_file(self, file: FWP[AnyStr]) -> ReturnType[Result, AnyStr]:
         try:
-            self.prepare(file)
-            data, file = self.parse_file(file)
-            return self.postprocess(data), self.cleanup(file)
+            return self.parse_file(file)
         except ParsingError as err:
             return self.handle_error(err, file)
 
-    def prepare(self, file: FWP[AnyStr], /) -> None:
-        if not self.is_ready():
-            raise ParserNotPrepared(f'Parser is not ready: {self!r}')
-
-    def is_ready(self) -> bool:
-        return True
-
     @abc.abstractmethod
-    def parse_file(self, fwp: FWP[AnyStr], /) -> tuple[D, FWP[AnyStr]]:
+    def parse_file(self, fwp: FWP[AnyStr], /) -> Success[AnyStr]:
         raise NotImplementedError
 
-    def postprocess(self, raw_data: D, /) -> Result:
-        return cast(Result, raw_data)
+    # def postprocess(self, raw_data: D, /) -> Result:
+    #     return cast(Result, raw_data)
+    #
+    # def cleanup(self, file: FWP[AnyStr], /) -> FWP[AnyStr]:
+    #     return file
 
-    def cleanup(self, file: FWP[AnyStr], /) -> FWP[AnyStr]:
-        return file
-
-    def handle_error(self, err: ParsingError, file: FWP[AnyStr]) -> tuple[None, FWP[AnyStr]]:
+    def handle_error(self, err: ParsingError, file: FWP[AnyStr]) -> Failure[AnyStr]:
         match self.on_parsing_error:
             case 'raise':
                 raise err

@@ -33,49 +33,46 @@ class RouteParser(Parser):
         validator=attrs.validators.instance_of(LineStepper),
     )
 
-    route: Route = attrs.field(factory=Route, init=False)
-
     def parse_file(self, fwp: FWP[AnyStr]) -> tuple[Route, FWP[AnyStr]]:
+        route = Route()
+
         self.stepper.take(fwp)
         until_predicate = self.stepper.get_anchor_predicate(LINK_END_ANCHOR)
 
-        found = self.stepper.step_until(self.parse_route_line, until_predicate)
-        if not found and not self.route.is_complete:
-            raise ParsingError(f'Route is not complete: {self.route!r}')
+        def parse_route_line(line: str | bytes) -> bool:
+            if self.stepper.is_file_binary:
+                line = line.decode()
 
-        return self.route, self.stepper.return_file()
+            if '/' in line and self.RouteLinePattern.match(line):
+                line = line.strip().strip(';')
+                start, iops, ends, *step = list(
+                    filter(None, re.split(r'[/()]', line))
+                )
 
-    def cleanup(self, fwp: FWP[AnyStr], /) -> FWP[AnyStr]:
-        self.route = Route()
-        return super(RouteParser, self).cleanup(fwp)
+                start = int(start)
 
-    def parse_route_line(self, line: str | bytes) -> bool:
-        if self.stepper.fwp.is_binary:
-            line = line.decode()
+                iops = {
+                    key: value
+                    for key, value in map(
+                        lambda p: tuple(map(int, p.split('='))), iops.split(','))
 
-        if '/' in line and self.RouteLinePattern.match(line):
-            line = line.strip().strip(';')
-            start, iops, ends, *step = list(
-                filter(None, re.split(r'[/()]', line))
-            )
+                }
 
-            start = int(start)
+                ends = [int(e) for e in ends.split(',')]
+                match step:
+                    case [step]:
+                        step = int(step)
+                    case []:
+                        step = 0
 
-            iops = {
-                key: value
-                for key, value in map(
-                    lambda p: tuple(map(int, p.split('='))), iops.split(','))
+                route_line = RouteLine(start, ends, iops, steps=step)
+                route.append(route_line)
 
-            }
+            return route.is_complete
 
-            ends = [int(e) for e in ends.split(',')]
-            match step:
-                case [step]:
-                    step = int(step)
-                case []:
-                    step = 0
+        found = self.stepper.step_until(parse_route_line, until_predicate)
+        if not found and not route.is_complete:
+            raise ParsingError(f'Route is not complete: {route!r}')
 
-            route_line = RouteLine(start, ends, iops, steps=step)
-            self.route.append(route_line)
+        return route, self.stepper.return_file()
 
-        return self.route.is_complete
