@@ -3,6 +3,7 @@ from typing import AnyStr, TypeVar, ClassVar, TypeAlias
 
 import attrs
 import numpy as np
+from icecream import ic
 from tqdm import tqdm
 
 from mctools.core.mcspace import MCSpace
@@ -40,10 +41,15 @@ class L910Parser(NewLinkParser):
         flags=re.VERBOSE
     )
 
+    SPIN_START_ANCHOR: ClassVar[str] = 'Computing Spin expectation values.'
+    SPIN_ANCHOR: ClassVar[str] = '<Sx>='
+
     RDM_ANCHOR: ClassVar[str] = 'Final 1PDM for State:'
     RDM_REAL_ANCHOR: ClassVar[str] = '1PDM Matrix (real)'
     RDM_IMAG_ANCHOR: ClassVar[str] = '1PDM Matrix (imag)'
 
+    TRANSITION_ANCHOR: ClassVar[str] = 'CI Transition Density Matrix'
+    TDM_MATRIX_ANCHOR: ClassVar[str] = '1TDM Matrix:'
     OSC_ANCHOR: ClassVar[str] = 'Oscillator Strength'
 
     stepper: LineStepper[AnyStr] = attrs.field(
@@ -94,26 +100,30 @@ class L910Parser(NewLinkParser):
         result: dict[Resource, np.ndarray] = {Resource.ci_space: self.ci_space}
 
         if (Resource.ci_energy | Resource.ci_vecs) & self.resources:
-            result.update(self.read_states())
+            result.update(self.read_energy_and_vector())
+
+        if Resource.ci_spin & self.resources:
+            result.update(self.read_spin_ev())
 
         if Resource.ci_int1e_rdms & self.resources:
             result.update(self.read_rdms())
 
-        if Resource.ci_osc & self.resources:
+        if Resource.ci_int1e_tdms & self.resources:
+            result.update(self.read_osc_and_tdms())
+        elif Resource.ci_osc in self.resources:
             result.update(self.read_osc())
 
         return result, self.stepper.return_file()
 
-    def read_states(self, /) -> dict[Resource, np.ndarray]:
+    def read_energy_and_vector(self, /) -> dict[Resource, np.ndarray]:
         print('Parsing CI Energies & Vectors')
 
         state_in = self.stepper.get_anchor_predicate(self.STATE_ANCHOR)
 
         states = np.zeros(self.n_states, dtype=[('idx', 'u4'), ('energy', 'f4')])
 
-        config_dtype = np.dtype([('addr', 'u4'), ('C', 'c8')])
-
         n_configs = min(self.ci_space.n_configs, self.MAX_N_CONFIGS)
+        config_dtype = np.dtype([('addr', 'u4'), ('C', 'c8')])
         vectors = np.zeros((self.n_states, n_configs), dtype=config_dtype)
 
         for idx in tqdm(range(self.n_states), unit='State'):
@@ -135,6 +145,24 @@ class L910Parser(NewLinkParser):
                     n_configs_read += 1
 
         return {Resource.ci_energy: states, Resource.ci_vecs: vectors}
+
+    def read_spin_ev(self) -> dict[Resource, np.ndarray]:
+        print('Parsing CI Spin Expectation Values')
+        spin_start_in = self.stepper.get_anchor_predicate(self.SPIN_START_ANCHOR)
+        self.stepper.step_to(spin_start_in, on_eof='raise')
+
+        spin = np.zeros(
+            (self.n_states, 6),
+            dtype='f4',
+        )
+
+        spin_in = self.stepper.get_anchor_predicate(self.SPIN_ANCHOR)
+        for idx in tqdm(range(self.n_states), unit='Spin'):
+            self.stepper.step_to(spin_in)
+            line = self.stepper.fwp.last_line.split()
+            spin[idx] = line[3:-3:2]
+
+        return {Resource.ci_spin: spin}
 
     def read_rdms(self, /) -> dict[Resource, np.ndarray]:
         print('Parsing CI 1e-RDMs')
@@ -163,21 +191,56 @@ class L910Parser(NewLinkParser):
         print('Parsing CI Oscillator Strengths')
 
         osc_in = self.stepper.get_anchor_predicate(self.OSC_ANCHOR)
-
-        n_transitions = self.n_initial * (2 * self.n_states - self.n_initial - 1) // 2
-        transitions = np.zeros(
-            n_transitions,
+        osc = np.zeros(
+            self.n_transitions,
             dtype=[('idx', 'u4'), ('fdx', 'u4'), ('osc', 'f4')]
         )
 
-        for jdx in tqdm(range(n_transitions), unit='transition'):
+        for jdx in tqdm(range(self.n_transitions), unit='transition'):
             self.stepper.step_to(osc_in)
             info = self.stepper.fwp.last_line.split()
-            transitions[jdx]['idx'] = info[4]
-            transitions[jdx]['fdx'] = info[6]
-            transitions[jdx]['osc'] = info[8]
+            osc[jdx]['idx'] = info[4]
+            osc[jdx]['fdx'] = info[6]
+            osc[jdx]['osc'] = info[8]
 
-        return {Resource.ci_osc: transitions}
+        return {Resource.ci_osc: osc}
+
+    def read_osc_and_tdms(self, /) -> dict[Resource, np.ndarray]:
+        print('Parsing CI Oscillator Strengths & 1e-TDMs')
+
+        transition_in = self.stepper.get_anchor_predicate(self.TRANSITION_ANCHOR)
+        osc_in = self.stepper.get_anchor_predicate(self.OSC_ANCHOR)
+        tdm_in = self.stepper.get_anchor_predicate(self.TDM_MATRIX_ANCHOR)
+        osc = np.zeros(
+            self.n_transitions,
+            dtype=[('idx', 'u4'), ('fdx', 'u4'), ('osc', 'f4')]
+        )
+
+        tdms_shape = (self.n_transitions, self.ci_space.n_mo_act, self.ci_space.n_mo_act)
+        tdms = np.zeros(
+            tdms_shape,
+            dtype=[('R', 'f4'), ('I', 'f4')]
+        )
+
+        matrix_parser = MatrixParser(stepper=self.stepper)
+        for jdx in tqdm(range(self.n_transitions), unit='transition'):
+            self.stepper.step_to(transition_in)
+            for component in ['R', 'I']:
+                self.stepper.step_to(tdm_in)
+                matrix_parser.read_full_exact(tdms[jdx][component])
+
+            self.stepper.step_to(osc_in)
+            info = self.stepper.fwp.last_line.split()
+            osc[jdx]['idx'] = info[4]
+            osc[jdx]['fdx'] = info[6]
+            osc[jdx]['osc'] = info[8]
+
+        tdms = tdms.view('c8')
+        return {Resource.ci_osc: osc, Resource.ci_int1e_tdms: tdms}
+
+    @property
+    def n_transitions(self) -> int:
+        return self.n_initial * (2 * self.n_states - self.n_initial - 1) // 2
 
 
 def process_complex_match(
