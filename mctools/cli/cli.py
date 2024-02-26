@@ -1,7 +1,7 @@
 import click
 from rich_click import RichCommand, RichGroup
 
-from .parser import parse
+from .parse import parse
 
 
 @click.group(

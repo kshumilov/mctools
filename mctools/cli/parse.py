@@ -1,0 +1,63 @@
+import pathlib
+import multiprocessing
+from typing import Sequence
+
+import click
+from rich_click import RichCommand
+
+from mctools.parsing.utils import (
+    parse_calculation,
+    group_calculations,
+    CalculationGroups,
+    ParsingBackend
+)
+
+
+__all__ = [
+    'parse'
+]
+
+
+def sequential_parse(groups: CalculationGroups, ext: str) -> None:
+    for group_filenames in groups.values():
+        parse_calculation(group_filenames, archive_ext=ext)
+
+
+@click.command(
+    name='parse',
+    cls=RichCommand,
+    help='Parsing utilities'
+)
+@click.option(
+    '-j', '--cpu', 'n_cpu',
+    type=int,
+    default=multiprocessing.cpu_count(),
+    help='Number of processes to use for parsing multiple calculations',
+    required=False,
+    show_default=True,
+)
+@click.argument(
+    'filenames',
+    type=click.Path(exists=True, path_type=pathlib.Path),
+    nargs=-1,
+)
+@click.option(
+    '--ext',
+    type=str,
+    required=False,
+    default='.h5',
+    show_default=True,
+    help='Name of the archive extension',
+)
+def parse(filenames: Sequence[pathlib.Path], n_cpu: int, ext: str,) -> None:
+    groups = group_calculations(filenames)
+
+    if len(groups) <= 1 or n_cpu == 1:
+        sequential_parse(groups, ext)
+        return
+
+    with multiprocessing.Pool(n_cpu) as pool:
+        pool.starmap(parse_calculation, [
+            (g, None, ParsingBackend.Gaussian, True, ext, True)
+            for g in groups.values()
+        ])

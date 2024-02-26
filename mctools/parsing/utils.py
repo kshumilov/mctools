@@ -1,6 +1,7 @@
 import pathlib
+from collections import defaultdict
 from enum import Enum, auto
-from typing import Any, Sequence
+from typing import Any, Sequence, TypeAlias
 
 import h5py
 import numpy as np
@@ -15,6 +16,7 @@ __all__ = [
     'ParsingBackend',
     'parse_calculation',
     'save_data',
+    'group_calculations',
 ]
 
 
@@ -22,8 +24,8 @@ class ParsingBackend(Enum):
     Gaussian = auto()
 
 
-def save_data(result: dict[Resource, Any], archive_name: str) -> None:
-    with h5py.File(archive_name, 'w', libver='latest') as f:
+def save_data(result: dict[Resource, Any], archive: pathlib.Path) -> None:
+    with h5py.File(archive, 'w', libver='latest') as f:
         for label, resource in result.items():
             name = '/'.join(label.name.split('_'))
 
@@ -48,13 +50,24 @@ def save_data(result: dict[Resource, Any], archive_name: str) -> None:
                 ds.attrs['max_elec'] = resource.graph.max_elec
 
 
+CalculationGroups: TypeAlias = defaultdict[tuple[pathlib.Path, str], list[pathlib.Path]]
+
+
+def group_calculations(filenames: Sequence[pathlib.Path]) -> CalculationGroups:
+    groups = defaultdict(list)
+    for p in filenames:
+        groups[(p.parent, p.stem)].append(p)
+    return groups
+
+
 def parse_calculation(
-        filename: str | Sequence[str],
+        filename: pathlib.Path | Sequence[pathlib.Path],
         requested: Resource | None = None,
         backend: ParsingBackend = ParsingBackend.Gaussian,
         save: bool = True,
-        archivename: str = '',
-) -> dict[Resource, Any]:
+        archive_ext: str = '.h5',
+        dont_return: bool = False
+) -> dict[Resource, Any] | None:
     requested = requested or Resource.ALL()
 
     match filename:
@@ -74,14 +87,13 @@ def parse_calculation(
 
     storage = parsing_func(filenames, requested)
 
-
-    if not save:
-        return storage
-
-    console.print(f'Saving to: {archivename!r}')
-    archivename = archivename or filenames[0].with_suffix('.h5')
-    save_data(storage, archive_name=archivename)
-
+    if save:
+        archive = filenames[0].with_suffix(archive_ext)
+        console.print(f'Saving to: {archive!r}')
+        save_data(storage, archive=archive)
     console.rule('[bold red]Done', style='bright_red')
 
+    if dont_return:
+        return None
     return storage
+
