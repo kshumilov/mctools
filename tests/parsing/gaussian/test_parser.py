@@ -6,6 +6,7 @@ from parsing.core.error import ParsingError
 
 from parsing.gaussian.log.route import RouteParser
 from parsing.gaussian.log.parser import LogParser
+from parsing.gaussian.fchk import FchkParser
 
 
 @pytest.fixture
@@ -28,3 +29,11 @@ class TestLogParser:
         parser = LogParser()
         (route, data), file = parser.parse(logfile)
         assert route.is_complete
+
+
+class TestFchkParser:
+    def test_valid_fchk(self, fchkfile: io.TextIOWrapper):
+        parser = FchkParser()
+        data, file = parser.parse(fchkfile)
+
+        assert isinstance(data, dict)

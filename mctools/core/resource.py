@@ -15,10 +15,22 @@ class Resource(Flag):
     mol_atcoords = auto()
     mol_atnums = auto()
     mol_charge = auto()
+    mol_nelec = auto()
     mol_multiplicity = auto()
 
-    # Orbital basis
+    # Atomic Orbital basis
     ao_basis = auto()
+    ao_prim_coef = auto()
+    ao_prim_exp = auto()
+
+    ao_shell_coords = auto()
+    ao_shell_size = auto()
+    ao_shell_atom = auto()
+    ao_shell_l = auto()
+
+    # MO Basis
+    mo_basis_molorb = auto()
+    mo_basis_ansatz = auto()
 
     # Integrals
     ao_int1e_overlap = auto()
@@ -36,7 +48,7 @@ class Resource(Flag):
     ci_nstates = auto()
     ci_vecs = auto()
     ci_space = auto()
-    ci_saweights = auto()
+    ci_sa_weights = auto()
     ci_int1e_rdms = auto()
     ci_int1e_tdms = auto()
     ci_osc = auto()
@@ -58,7 +70,7 @@ class Resource(Flag):
     def CI(cls) -> Resource:
         return cls(cls.ci_energy | cls.ci_vecs | cls.ci_space |
                    cls.ci_int1e_rdms | cls.ci_int1e_tdms | cls.ci_osc |
-                   cls.ci_saweights | cls.ci_spin)
+                   cls.ci_sa_weights | cls.ci_spin)
 
     # @classmethod
     # def ci_states(cls) -> set[Resource]:

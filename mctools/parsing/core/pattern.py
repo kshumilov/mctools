@@ -9,6 +9,8 @@ from typing import Generic, ClassVar, TypeVar, Any, Callable, Iterator, AnyStr
 
 __all__ = [
     'ProcessedPattern',
+    'simple_int_tmplt',
+    'simple_float_tmplt',
 ]
 
 

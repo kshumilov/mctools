@@ -8,13 +8,13 @@ from typing import Any, TypeAlias, AnyStr, ClassVar
 import attrs
 import numpy as np
 
-from core.resource import Resource
+from mctools.core.resource import Resource
 
-from parsing.core.error import ParsingError
-from parsing.core.filehandler import FileWithPosition
-from parsing.core.parser import Parser
-from parsing.core.stepper import LineStepper
-from parsing.gaussian.log.route.route import IOps
+from ....core.error import ParsingError
+from ....core.filehandler import FileWithPosition
+from ....core.parser import Parser
+from ....core.stepper import LineStepper
+from ..route.route import IOps
 
 __all__ = [
     'NewLinkParser',
