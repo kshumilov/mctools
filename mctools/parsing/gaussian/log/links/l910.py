@@ -114,6 +114,7 @@ class L910Parser(NewLinkParser):
         elif Resource.ci_osc in self.resources:
             result.update(self.read_osc())
 
+        console.print('Finished parsing Link 910')
         return result, self.stepper.return_file()
 
     def read_energy_and_vector(self, /) -> dict[Resource, np.ndarray]:
