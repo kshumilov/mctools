@@ -32,11 +32,12 @@ def parse(calc: pathlib.Path, include: tuple[str], archive: str | None = None) -
 
     if FCHK_SUFFIX in include:
         filename = calc.with_suffix(f'.{FCHK_SUFFIX}')
-        with open(filename, 'r') as f:
-            click.echo(f'Parsing {FCHK_SUFFIX.capitalize()}: {filename}')
-            parser = FchkParser()
-            result, *_ = parser.parse(f)
-            data.update(result)
+        if filename.exists():
+            with open(filename, 'r') as f:
+                click.echo(f'Parsing {FCHK_SUFFIX.capitalize()}: {filename}')
+                parser = FchkParser()
+                result, *_ = parser.parse(f)
+                data.update(result)
 
     if archive is None:
         archive = calc.with_suffix('.h5')
