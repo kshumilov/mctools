@@ -6,6 +6,7 @@ import attrs
 import numpy as np
 from numpy import ndarray, dtype
 
+from mctools.cli.console import console
 from mctools.core.resource import Resource
 
 from ..core.error import AnchorNotFound
@@ -90,6 +91,11 @@ class FchkParser(Parser):
         }
     )
 
+    requested: Resource = attrs.field(
+        factory=Resource.ALL,
+        validator=attrs.validators.instance_of(Resource),
+    )
+
     stepper: LineStepper[AnyStr] = attrs.field(
         factory=LineStepper,
         validator=attrs.validators.instance_of(LineStepper),
@@ -108,6 +114,8 @@ class FchkParser(Parser):
     )
 
     def parse_file(self, fwp: FWP[AnyStr], /) -> tuple[dict[Resource, np.ndarray], FWP[AnyStr] | str]:
+        console.rule(f'Fchk file: {fwp.file.name}')
+
         self.stepper.take(fwp)
         result = {}
 
@@ -131,9 +139,12 @@ class FchkParser(Parser):
 
         result.update(self.read_molecular_orbitals(n_ao, mo_anzats))
 
+        console.print('Finished parsing FCHK file')
         return result, self.stepper.return_file()
 
     def read_description(self) -> dict[str, str]:
+        console.print('Parsing FCHK description...')
+
         short_title = self.stepper.readline()
 
         if match := self.MethodPatt.search(self.stepper.readline()):
@@ -142,6 +153,8 @@ class FchkParser(Parser):
         raise AnchorNotFound('Could not find FCHK method line')
 
     def read_molecular_geometry(self) -> dict[Resource, np.ndarray]:
+        console.print('Parsing Molecule geometry...')
+
         atomic_number = self.read_array('Atomic numbers')
         coords = self.read_array('Current cartesian coordinates')
         coords = coords.reshape((-1, 3))
@@ -152,6 +165,8 @@ class FchkParser(Parser):
         }
 
     def read_basis(self) -> dict[str, np.ndarray]:
+        console.print('Parsing Atomic Orbital Basis...')
+
         # Shell information (Part 1)
         shell_code = self.read_array('Shell types')
         shell_size = self.read_array('Number of primitives per shell')
@@ -179,6 +194,8 @@ class FchkParser(Parser):
         return shells | primitives
 
     def read_molecular_orbitals(self, n_ao: int, mo_anzats: str) -> dict[Resource, np.ndarray]:
+        console.print('Parsing Molecular Orbital Basis...')
+
         molorb_raw_a = self.read_array('Alpha MO coefficients')
 
         match mo_anzats:

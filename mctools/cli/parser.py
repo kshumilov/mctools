@@ -1,19 +1,17 @@
 import pathlib
+from collections import defaultdict
+from typing import Sequence
 
 import click
-from rich_click import RichCommand, RichGroup
+from rich_click import RichCommand
 
-from mctools.parsing.gaussian import LogParser, FchkParser
-from mctools.parsing.utils import save_data
+from mctools.parsing.utils import parse_calculation, ParsingBackend
+from mctools.parsing.gaussian.utils import GaussianSuffixes
 
 
 __all__ = [
     'parse'
 ]
-
-LOG_SUFFIX = 'log'
-FCHK_SUFFIX = 'fchk'
-GAUSSIAN_SUFFIXES = [LOG_SUFFIX, FCHK_SUFFIX]
 
 
 @click.command(
@@ -22,31 +20,24 @@ GAUSSIAN_SUFFIXES = [LOG_SUFFIX, FCHK_SUFFIX]
     help='Parsing utilities'
 )
 @click.argument(
-    'calc',
-    type=click.Path(exists=True, path_type=pathlib.Path)
+    'filenames',
+    type=click.Path(exists=True, path_type=pathlib.Path),
+    nargs=-1,
 )
-@click.option('--include', multiple=True, type=click.Choice(GAUSSIAN_SUFFIXES, case_sensitive=False), default=GAUSSIAN_SUFFIXES)
-@click.option('--archive', type=click.Path(path_type=pathlib.Path), required=False, help='Name of the hdf5 archive: by default [CALC].h5')
-def parse(calc: pathlib.Path, include: tuple[str], archive: str | None = None) -> None:
-    data = {}
-    if LOG_SUFFIX in include:
-        filename = calc.with_suffix(f'.{LOG_SUFFIX}')
-        with open(filename, 'r') as f:
-            parser = LogParser()
-            (route, result), *_ = parser.parse(f)
-            data.update(result)
+@click.option('--include', multiple=True, type=click.Choice(list(GaussianSuffixes), case_sensitive=False), default=list(GaussianSuffixes))
+@click.option('--ext', type=click.Path(path_type=pathlib.Path), required=False, default='.h5', help='Name of the hdf5 extenstion')
+def parse(filenames: Sequence[pathlib.Path], include: tuple[str], ext: str) -> None:
+    click.echo(filenames)
+    selected = filter(lambda p: p.suffix in include, filenames)
+    groups = defaultdict(list)
+    for p in selected:
+        groups[(p.parent, p.stem)].append(p)
 
-    if FCHK_SUFFIX in include:
-        filename = calc.with_suffix(f'.{FCHK_SUFFIX}')
-        if filename.exists():
-            with open(filename, 'r') as f:
-                click.echo(f'Parsing {FCHK_SUFFIX.capitalize()}: {filename}')
-                parser = FchkParser()
-                result, *_ = parser.parse(f)
-                data.update(result)
-
-    if archive is None:
-        archive = calc.with_suffix('.h5')
-
-    click.echo(f'Saving results to {archive}')
-    save_data(data, archive)
+    for (parent, stem), calc_filenames in groups.items():
+        archive = parent / f'{stem}{ext}'
+        parse_calculation(
+            calc_filenames,
+            backend=ParsingBackend.Gaussian,
+            save=True,
+            archivename=archive
+        )

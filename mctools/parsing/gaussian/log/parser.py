@@ -16,10 +16,7 @@ if TYPE_CHECKING:
     from parsing.gaussian.log.route import Route
 
     FWP: TypeAlias = FileWithPosition[AnyStr]
-    D: TypeAlias = tuple[
-        Route,
-        dict[Resource, Any]
-    ]
+    D: TypeAlias = dict[Resource, Any]
     R: TypeAlias = tuple[D, FWP]
 
 
@@ -38,7 +35,7 @@ class LogParser(Parser):
     )
 
     def parse_file(self, fwp: FWP[AnyStr]) -> R[AnyStr]:
-        console.print(f'Parsing Log file: {fwp.file.name}')
+        console.rule(f'Log file: {fwp.file.name}')
 
         console.print("Parsing route...", )
         route_parser = RouteParser()
@@ -53,7 +50,7 @@ class LogParser(Parser):
         for link_data in links_data:
             result.update(link_data)
 
-        return (route, result), fwp
+        return result, fwp
 
     def build_link_parsers(self, route):
         console.print('Found links: ', end=' ')
@@ -68,6 +65,7 @@ class LogParser(Parser):
             console.print(f'{link.name}', end=' ')
             parser = parser_class(resources=resources, iops=iops)
             parsers.add_parser(parser)
+
         console.print()
         return parsers
 
