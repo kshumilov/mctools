@@ -44,6 +44,8 @@ class L302Parser(NewLinkParser):
     )
 
     def parse_file(self, fwp: FWP[AnyStr], /) -> tuple[dict[Resource, np.ndarray], FWP[AnyStr]]:
+        print('Parsing link L302')
+
         self.stepper.take(fwp)
 
         # Step to the beginning of the link

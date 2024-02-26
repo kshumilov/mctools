@@ -41,4 +41,5 @@ def parse(calc: pathlib.Path, include: tuple[str], archive: str | None = None) -
     if archive is None:
         archive = calc.with_suffix('.h5')
 
+    click.echo(f'Saving results to {archive}')
     save_data(data, archive)

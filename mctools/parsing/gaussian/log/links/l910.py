@@ -83,6 +83,8 @@ class L910Parser(NewLinkParser):
         return self.iops[19]
 
     def parse_file(self, fwp: FWP[AnyStr], /) -> tuple[dict[Resource, np.ndarray], FWP[AnyStr]]:
+        print('Parsing link L910')
+
         self.stepper.take(fwp)
 
         # Step to the beginning of the link
@@ -103,6 +105,8 @@ class L910Parser(NewLinkParser):
         return result, self.stepper.return_file()
 
     def read_states(self, /) -> dict[Resource, np.ndarray]:
+        print('Parsing CI Energies & Vectors')
+
         state_in = self.stepper.get_anchor_predicate(self.STATE_ANCHOR)
 
         states = np.zeros(self.n_states, dtype=[('idx', 'u4'), ('energy', 'f4')])
@@ -133,6 +137,8 @@ class L910Parser(NewLinkParser):
         return {Resource.ci_energy: states, Resource.ci_vecs: vectors}
 
     def read_rdms(self, /) -> dict[Resource, np.ndarray]:
+        print('Parsing CI 1e-RDMs')
+
         rdm_in = self.stepper.get_anchor_predicate(self.RDM_ANCHOR)
         rdm_parts_in = [
             self.stepper.get_anchor_predicate(anchor)
@@ -154,6 +160,8 @@ class L910Parser(NewLinkParser):
         return {Resource.ci_int1e_rdms: rdms}
 
     def read_osc(self, /) -> dict[Resource, np.ndarray]:
+        print('Parsing CI Oscillator Strengths')
+
         osc_in = self.stepper.get_anchor_predicate(self.OSC_ANCHOR)
 
         n_transitions = self.n_initial * (2 * self.n_states - self.n_initial - 1) // 2
