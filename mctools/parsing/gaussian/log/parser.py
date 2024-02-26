@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import pathlib
 from typing import TypeAlias, AnyStr, Any, TYPE_CHECKING, ClassVar
 
 import attrs
-import h5py
-import numpy as np
 
+from mctools.cli.console import console
 from mctools.core.resource import Resource
+
 from .route import Link, RouteParser
 from ...core import Parser, SequentialParser
 from ...core.filehandler import FileWithPosition
@@ -39,10 +38,15 @@ class LogParser(Parser):
     )
 
     def parse_file(self, fwp: FWP[AnyStr]) -> R[AnyStr]:
+        console.print(f'Parsing Log file: {fwp.file.name}')
+
+        console.print("Parsing route...", )
         route_parser = RouteParser()
         route, fwp = route_parser.parse(fwp)
 
         links_parser = self.build_link_parsers(route)
+
+        console.print("Parsing links...", new_line_start=True)
         links_data, fwp = links_parser.parse(fwp)
 
         result: dict[Resource, Any] = {}
@@ -52,6 +56,7 @@ class LogParser(Parser):
         return (route, result), fwp
 
     def build_link_parsers(self, route):
+        console.print('Found links: ', end=' ')
         parsers = SequentialParser()
         for link, iops, available in route.get_available_resources():
             if not (resources := self.requested & available):
@@ -60,8 +65,10 @@ class LogParser(Parser):
             if (parser_class := self.LINK_PARSERS.get(link)) is None:
                 continue
 
+            console.print(f'{link.name}', end=' ')
             parser = parser_class(resources=resources, iops=iops)
             parsers.add_parser(parser)
+        console.print()
         return parsers
 
     @classmethod

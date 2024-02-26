@@ -3,9 +3,10 @@ from typing import AnyStr, TypeVar, ClassVar, TypeAlias
 
 import attrs
 import numpy as np
-from icecream import ic
-from tqdm import tqdm
 
+from rich.progress import track
+
+from mctools.cli.console import console
 from mctools.core.mcspace import MCSpace
 from mctools.core.resource import Resource
 
@@ -89,13 +90,13 @@ class L910Parser(NewLinkParser):
         return self.iops[19]
 
     def parse_file(self, fwp: FWP[AnyStr], /) -> tuple[dict[Resource, np.ndarray], FWP[AnyStr]]:
-        print('Parsing link L910')
-
         self.stepper.take(fwp)
 
         # Step to the beginning of the link
         start_in = self.stepper.get_anchor_predicate(self.START_ANCHOR)
-        self.stepper.step_to(start_in, on_eof='raise')
+
+        with console.status("Looking for Link 910..."):
+            self.stepper.step_to(start_in, on_eof='raise')
 
         result: dict[Resource, np.ndarray] = {Resource.ci_space: self.ci_space}
 
@@ -116,8 +117,6 @@ class L910Parser(NewLinkParser):
         return result, self.stepper.return_file()
 
     def read_energy_and_vector(self, /) -> dict[Resource, np.ndarray]:
-        print('Parsing CI Energies & Vectors')
-
         state_in = self.stepper.get_anchor_predicate(self.STATE_ANCHOR)
 
         states = np.zeros(self.n_states, dtype=[('idx', 'u4'), ('energy', 'f4')])
@@ -126,7 +125,7 @@ class L910Parser(NewLinkParser):
         config_dtype = np.dtype([('addr', 'u4'), ('C', 'c8')])
         vectors = np.zeros((self.n_states, n_configs), dtype=config_dtype)
 
-        for idx in tqdm(range(self.n_states), unit='State'):
+        for idx in track(range(self.n_states), description="Reading CI Energies & Vectors..."):
             self.stepper.step_to(state_in)
             line = self.stepper.fwp.last_line.split()
             states[idx]['idx'] = line[1]
@@ -147,7 +146,6 @@ class L910Parser(NewLinkParser):
         return {Resource.ci_energy: states, Resource.ci_vecs: vectors}
 
     def read_spin_ev(self) -> dict[Resource, np.ndarray]:
-        print('Parsing CI Spin Expectation Values')
         spin_start_in = self.stepper.get_anchor_predicate(self.SPIN_START_ANCHOR)
         self.stepper.step_to(spin_start_in, on_eof='raise')
 
@@ -157,7 +155,7 @@ class L910Parser(NewLinkParser):
         )
 
         spin_in = self.stepper.get_anchor_predicate(self.SPIN_ANCHOR)
-        for idx in tqdm(range(self.n_states), unit='Spin'):
+        for idx in track(range(self.n_states), description='Reading Spin expectation values...'):
             self.stepper.step_to(spin_in)
             line = self.stepper.fwp.last_line.split()
             spin[idx] = line[3:-3:2]
@@ -165,8 +163,6 @@ class L910Parser(NewLinkParser):
         return {Resource.ci_spin: spin}
 
     def read_rdms(self, /) -> dict[Resource, np.ndarray]:
-        print('Parsing CI 1e-RDMs')
-
         rdm_in = self.stepper.get_anchor_predicate(self.RDM_ANCHOR)
         rdm_parts_in = [
             self.stepper.get_anchor_predicate(anchor)
@@ -178,7 +174,7 @@ class L910Parser(NewLinkParser):
         rdms = np.zeros(shape, dtype=[('R', 'f4'), ('I', 'f4')])
 
         matrix_parser = MatrixParser(stepper=self.stepper)
-        for state_idx in tqdm(range(self.n_states), unit='RDM'):
+        for state_idx in track(range(self.n_states), description='Reading CI State RDMs...'):
             self.stepper.step_to(rdm_in)
             for component, rdm_part_in in zip(['R', 'I'], rdm_parts_in):
                 self.stepper.step_to(rdm_part_in)
@@ -188,15 +184,13 @@ class L910Parser(NewLinkParser):
         return {Resource.ci_int1e_rdms: rdms}
 
     def read_osc(self, /) -> dict[Resource, np.ndarray]:
-        print('Parsing CI Oscillator Strengths')
-
         osc_in = self.stepper.get_anchor_predicate(self.OSC_ANCHOR)
         osc = np.zeros(
             self.n_transitions,
             dtype=[('idx', 'u4'), ('fdx', 'u4'), ('osc', 'f4')]
         )
 
-        for jdx in tqdm(range(self.n_transitions), unit='transition'):
+        for jdx in track(range(self.n_transitions), description='Reading CI Oscillator Strengths...'):
             self.stepper.step_to(osc_in)
             info = self.stepper.fwp.last_line.split()
             osc[jdx]['idx'] = info[4]
@@ -223,7 +217,7 @@ class L910Parser(NewLinkParser):
         )
 
         matrix_parser = MatrixParser(stepper=self.stepper)
-        for jdx in tqdm(range(self.n_transitions), unit='transition'):
+        for jdx in track(range(self.n_transitions), description='Reading CI TDMs...'):
             self.stepper.step_to(transition_in)
             for component in ['R', 'I']:
                 self.stepper.step_to(tdm_in)

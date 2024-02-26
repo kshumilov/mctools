@@ -4,8 +4,8 @@ from typing import ClassVar, AnyStr
 
 import attrs
 import numpy as np
-from tqdm import tqdm
 
+from mctools.cli.console import console
 from mctools.core.resource import Resource
 
 from ....core import LineStepper
@@ -44,16 +44,18 @@ class L302Parser(NewLinkParser):
     )
 
     def parse_file(self, fwp: FWP[AnyStr], /) -> tuple[dict[Resource, np.ndarray], FWP[AnyStr]]:
-        print('Parsing link L302')
-
         self.stepper.take(fwp)
 
         # Step to the beginning of the link
         start_in = self.stepper.get_anchor_predicate(self.START_ANCHOR)
-        self.stepper.step_to(start_in, on_eof='raise')
+
+        with console.status('Looking for Link 302...'):
+            self.stepper.step_to(start_in, on_eof='raise')
 
         n_aos = self.read_n_aos()
         result = self.read_stv_integrals(n_aos)
+
+        console.print('Finished parsing Link 302')
         return result, self.stepper.return_file()
 
     def read_n_aos(self) -> int:
@@ -68,10 +70,13 @@ class L302Parser(NewLinkParser):
         result: dict[Resource, np.ndarray] = {}
         matrix_parser = MatrixParser(stepper=self.stepper)
 
-        for resource in tqdm(self.resources, unit='int1e'):
+        console.print('Reading STV integrals...')
+        for resource in self.resources:
             anchor_in = self.stepper.get_anchor_predicate(self.RESOURCE_ANCHORS[resource])
-            self.stepper.step_to(anchor_in, on_eof='raise')
-            matrix = result.setdefault(resource, np.zeros((n_aos, n_aos), dtype=np.float32))
-            matrix_parser.read_tril_exact(matrix)
-            matrix += (matrix.T - np.diag(np.diag(matrix)))
+
+            with console.status(f'Reading {resource.name}...'):
+                self.stepper.step_to(anchor_in, on_eof='raise')
+                matrix = result.setdefault(resource, np.zeros((n_aos, n_aos), dtype=np.float32))
+                matrix_parser.read_tril_exact(matrix)
+                matrix += (matrix.T - np.diag(np.diag(matrix)))
         return result

@@ -1,6 +1,7 @@
 import pathlib
 
 import click
+from rich_click import RichCommand, RichGroup
 
 from mctools.parsing.gaussian import LogParser, FchkParser
 from mctools.parsing.utils import save_data
@@ -15,8 +16,15 @@ FCHK_SUFFIX = 'fchk'
 GAUSSIAN_SUFFIXES = [LOG_SUFFIX, FCHK_SUFFIX]
 
 
-@click.command(name='parse')
-@click.argument('calc', type=click.Path(exists=True, path_type=pathlib.Path))
+@click.command(
+    name='parse',
+    cls=RichCommand,
+    help='Parsing utilities'
+)
+@click.argument(
+    'calc',
+    type=click.Path(exists=True, path_type=pathlib.Path)
+)
 @click.option('--include', multiple=True, type=click.Choice(GAUSSIAN_SUFFIXES, case_sensitive=False), default=GAUSSIAN_SUFFIXES)
 @click.option('--archive', type=click.Path(path_type=pathlib.Path), required=False, help='Name of the hdf5 archive: by default [CALC].h5')
 def parse(calc: pathlib.Path, include: tuple[str], archive: str | None = None) -> None:
@@ -24,8 +32,6 @@ def parse(calc: pathlib.Path, include: tuple[str], archive: str | None = None) -
     if LOG_SUFFIX in include:
         filename = calc.with_suffix(f'.{LOG_SUFFIX}')
         with open(filename, 'r') as f:
-            click.echo(f'Parsing {LOG_SUFFIX.capitalize()}: {filename}')
-
             parser = LogParser()
             (route, result), *_ = parser.parse(f)
             data.update(result)
