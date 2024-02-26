@@ -6,7 +6,7 @@ from typing import AnyStr, ClassVar, TYPE_CHECKING, TypeAlias
 
 import attrs
 
-from parsing.core import Parser, LineStepper, ParsingError
+from ....core import Parser, LineStepper, ParsingError
 
 from .route import Route, RouteLine
 from ..utils import LINK_END_ANCHOR

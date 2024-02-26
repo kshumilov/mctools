@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from parsing.core.parser.base import *
-from parsing.core.parser.list import *
-from parsing.core.parser.dict import *
+from .base import *
+from .list import *
+from .dict import *
 
 __all__ = [
     'Parser',

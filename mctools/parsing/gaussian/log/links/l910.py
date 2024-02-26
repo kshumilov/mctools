@@ -5,15 +5,15 @@ import attrs
 import numpy as np
 from tqdm import tqdm
 
-from core.mcspace import MCSpace
-from core.resource import Resource
+from mctools.core.mcspace import MCSpace
+from mctools.core.resource import Resource
 
-from parsing.core.parser.base import FWP
-from parsing.core.pattern import ProcessedPattern
-from parsing.core.stepper import LineStepper
-from parsing.core.filehandler import FileWithPosition
+from ....core.parser.base import FWP
+from ....core.pattern import ProcessedPattern
+from ....core.stepper import LineStepper
+from ....core.filehandler import FileWithPosition
 
-from parsing.gaussian.log.links.base import MatrixParser, NewLinkParser
+from .base import MatrixParser, NewLinkParser
 
 
 __all__ = [
@@ -91,7 +91,7 @@ class L910Parser(NewLinkParser):
 
         result: dict[Resource, np.ndarray] = {Resource.ci_space: self.ci_space}
 
-        if (Resource.ci_energy | Resource.ci_energy) & self.resources:
+        if (Resource.ci_energy | Resource.ci_vecs) & self.resources:
             result.update(self.read_states())
 
         if Resource.ci_int1e_rdms & self.resources:
@@ -108,7 +108,9 @@ class L910Parser(NewLinkParser):
         states = np.zeros(self.n_states, dtype=[('idx', 'u4'), ('energy', 'f4')])
 
         config_dtype = np.dtype([('addr', 'u4'), ('C', 'c8')])
-        vectors = np.zeros((self.n_states, self.ci_space.n_configs), dtype=config_dtype)
+
+        n_configs = min(self.ci_space.n_configs, self.MAX_N_CONFIGS)
+        vectors = np.zeros((self.n_states, n_configs), dtype=config_dtype)
 
         for idx in tqdm(range(self.n_states), unit='State'):
             self.stepper.step_to(state_in)
@@ -117,7 +119,7 @@ class L910Parser(NewLinkParser):
             states[idx]['energy'] = line[4]
 
             n_configs_read = 0
-            while n_configs_read < self.ci_space.n_configs:
+            while n_configs_read < n_configs:
                 vector = vectors[idx]
                 line = self.stepper.readline()
                 for match in self.VEC_PATT.finditer(line):

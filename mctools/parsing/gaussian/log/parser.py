@@ -1,20 +1,16 @@
 from __future__ import annotations
 
 import pathlib
-from collections import defaultdict, Counter
 from typing import TypeAlias, AnyStr, Any, TYPE_CHECKING, ClassVar
 
 import attrs
 import h5py
 import numpy as np
 
-from core.resource import Resource
-
-from parsing.core import Parser, SequentialParser
-from parsing.core.filehandler import FileWithPosition
-from parsing.gaussian.log.route import Link, RouteParser
-
-# from parsing.gaussian.log.links import LinksParser
+from mctools.core.resource import Resource
+from .route import Link, RouteParser
+from ...core import Parser, SequentialParser
+from ...core.filehandler import FileWithPosition
 
 if TYPE_CHECKING:
     from parsing.gaussian.log.links.base import NewLinkParser
@@ -42,8 +38,6 @@ class LogParser(Parser):
         validator=attrs.validators.instance_of(Resource),
     )
 
-    save: bool = attrs.field(default=True)
-
     def parse_file(self, fwp: FWP[AnyStr]) -> R[AnyStr]:
         route_parser = RouteParser()
         route, fwp = route_parser.parse(fwp)
@@ -54,9 +48,6 @@ class LogParser(Parser):
         result: dict[Resource, Any] = {}
         for link_data in links_data:
             result.update(link_data)
-
-        if self.save:
-            self.save_data(result, fwp)
 
         return (route, result), fwp
 
@@ -76,17 +67,6 @@ class LogParser(Parser):
     @classmethod
     def register_link_parser(cls, link: Link, parser_class: type[NewLinkParser]) -> None:
         cls.LINK_PARSERS[link] = parser_class
-
-    def save_data(self, result: dict[Resource, np.ndarray], fwp: FWP[AnyStr]) -> None:
-        filename = pathlib.Path(fwp.file.name).with_suffix('.h5')
-        with h5py.File(filename, libver='latest') as f:
-            for label, resource in result.items():
-                if isinstance(resource, np.ndarray):
-                    name = '/'.join(label.name.split('_'))
-                    f.create_dataset(
-                        name, data=resource, dtype=resource.dtype,
-                        compression='gzip'
-                    )
 
 
 from .links import L302Parser, L910Parser
