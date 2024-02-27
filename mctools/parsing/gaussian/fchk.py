@@ -113,7 +113,7 @@ class FchkParser(Parser):
         group_maps={'size': int, 'dtype': process_data_type}
     )
 
-    def parse_file(self, fwp: FWP[AnyStr], /) -> tuple[dict[Resource, np.ndarray], FWP[AnyStr] | str]:
+    def parse_file(self, fwp: FWP[AnyStr], /) -> tuple[dict[Resource, np.ndarray], FWP[AnyStr]]:
         console.rule(f'Fchk file: {fwp.file.name}')
 
         self.stepper.take(fwp)
@@ -164,7 +164,7 @@ class FchkParser(Parser):
             Resource.mol_atcoords: coords,
         }
 
-    def read_basis(self) -> dict[str, np.ndarray]:
+    def read_basis(self) -> dict[Resource, np.ndarray]:
         console.print('Parsing Atomic Orbital Basis...')
 
         # Shell information (Part 1)
