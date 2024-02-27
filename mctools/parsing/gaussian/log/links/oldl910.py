@@ -418,7 +418,7 @@ def parse_l910_route(route_line: RouteLine) -> tuple[ParsingResultType, Flag]:
     ras1_mo = route_line.get(112)
     ras3_mo = route_line.get(114)
     ras2_mo = n_mos - ras1_mo - ras3_mo
-    mcspace = MCSpace.from_space_spec(
+    mcspace = MCSpace.from_ras_spec(
         (ras1_mo, ras2_mo, ras3_mo), route_line.get(6),
         max_hole=route_line.get(111), max_elec=route_line.get(113)
     )

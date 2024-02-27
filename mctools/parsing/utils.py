@@ -48,6 +48,7 @@ def save_data(result: dict[Resource, Any], archive: pathlib.Path) -> None:
                 ds = f.create_dataset(name, data=resource.graph.spaces)
                 ds.attrs['max_hole'] = resource.graph.max_hole
                 ds.attrs['max_elec'] = resource.graph.max_elec
+                ds.attrs['n_elec'] = resource.graph.n_elec
 
 
 CalculationGroups: TypeAlias = defaultdict[tuple[pathlib.Path, str], list[pathlib.Path]]

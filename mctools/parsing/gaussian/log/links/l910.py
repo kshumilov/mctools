@@ -70,7 +70,7 @@ class L910Parser(NewLinkParser):
         ras1_mo = iops[112]
         ras3_mo = iops[114]
         ras2_mo = n_mos - ras1_mo - ras3_mo
-        mcspace = MCSpace.from_space_spec(
+        mcspace = MCSpace.from_ras_spec(
             (ras1_mo, ras2_mo, ras3_mo), iops[6],
             max_hole=iops[111], max_elec=iops[113],
         )

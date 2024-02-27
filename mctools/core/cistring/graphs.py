@@ -1,22 +1,26 @@
-import warnings
+from __future__ import annotations
 
 from collections import defaultdict
 from itertools import product
-from typing import NamedTuple, NoReturn, Literal
+from typing import NoReturn, Literal, ClassVar
 
+import attr
+import attrs
+import h5py
 import numpy as np
 import numpy.typing as npt
-
+import pandas as pd
 from scipy.special import comb
 
-from .utils import *
+from mctools.core.cistring.utils import *
 
 __all__ = [
-    'RASMOs', 'Electrons',
-    'SimpleGraph', 'RASGraph',
+    'SimpleGraph',
+    'DASGraph',
 ]
 
 
+@attr.define(repr=False, eq=False)
 class SimpleGraph:
     """Basic CI string manipulations such as addressing, excitation lists, etc.
 
@@ -30,76 +34,67 @@ class SimpleGraph:
     TODO: Rewrite nodes and edges formation in rectangle format (i.e. transform parallelogram graph into rectangle)
     TODO: implement <I|J>, p^+|J>, p|J>, excitation lists, etc...
     TODO: Fix dtypes and typing
-    TODO: allow python int type for configurations
     TODO: Use dtype with multiple int fields to manipulate strings
     """
-    __slots__ = [
-        'n_orb', 'n_elec',
-        'n_configs', 'reverse',
-        'edges', 'offsets',
+    BYTE_TO_BITS: ClassVar[int] = 8
 
-        'config_dtype',
-        'max_orb'
-    ]
+    n_orb: int = attrs.field(
+        default=0,
+        converter=int,
+        validator=attr.validators.ge(0),
+    )
 
-    n_orb: int
-    n_elec: int
+    n_elec: int = attrs.field(
+        default=0,
+        converter=int,
+        validator=attr.validators.ge(0),
+    )
 
-    n_configs: int  # Number of determinants = n_orb choose n_e
-    reverse: bool
+    @n_elec.validator
+    def _validate_n_elec(self, attribute: attrs.Attribute, n_elec: int):
+        if not (0 <= n_elec <= self.n_orb):
+            raise ValueError(f'Invalid definition of active space: ({n_elec}e|{self.n_orb}o)')
 
-    nodes: npt.NDArray[np.uint64]
-    edges: npt.NDArray[np.uint64]
-    offsets: npt.NDArray[np.uint64]
+    reverse: bool = False
 
-    dtype: npt.DTypeLike = np.dtype(np.uint64)
-    # config_dtype: ClassVar[npt.DTypeLike] = np.dtype(np.int64)
-    # max_orb: ClassVar[np.int64] = dtype.type(config_dtype.itemsize * BYTE_TO_BITS)
+    config_dtype: npt.DTypeLike = attrs.field()
 
-    def __init__(self, n_orb: int, n_elec: int, /, nodes: npt.NDArray[np.uint64] | None = None, *,
-                 reverse: bool = False, use_python_int: bool = False):
-        # addr_dtype = np.min_scalar_type(g.n_configs)
-        # config_dtype = np.min_scalar_type(1 << n_orb)
-        # orb_idx_dtype = np.min_scalar_type(n_orb)
+    @config_dtype.default
+    def _get_default_config_dtype(self) -> npt.DTypeLike:
+        if self.n_orb > 64:
+            return np.dtype(object)
+        return np.dtype(np.int64)
 
-        if use_python_int:
-            warnings.warn('Using python int as config data type, expect slow performance', RuntimeWarning)
+    max_norb: float |  int = attrs.field()
 
-            self.config_dtype = np.dtype(object)
-            self.max_orb = np.inf
-        else:
-            self.config_dtype = np.dtype(np.int64)
-            self.max_orb = self.config_dtype.itemsize * BYTE_TO_BITS
+    @max_norb.default
+    def _get_default_max_norb(self) -> int | float:
+        if self.config_dtype.type is object:
+            return np.inf
+        return self.config_dtype.itemsize * self.BYTE_TO_BITS
 
-        if n_orb > self.max_orb:
-            raise ValueError(f'{self.__class__.__name__} is unable to support space with {n_orb} orbitals. '
-                             f'Current maximum is {self.max_orb} orbitals.')
+    edges: npt.NDArray[np.uint64] = attrs.field(default=None, init=False)
+    offsets: npt.NDArray[np.uint64] = attrs.field(default=None, init=False)
 
-        if not self.is_valid_space(n_orb, n_elec):
-            raise ValueError(f'Invalid definition of active space: ({n_elec}e|{n_orb}o)')
+    def __attrs_post_init__(self) -> None:
+        if self.n_orb > self.max_norb:
+            raise ValueError(f'{self.__class__.__name__} is unable to support space with {self.n_orb} orbitals. '
+                             f'Current maximum is {self.max_norb} orbitals.')
 
-        self.n_orb = n_orb
-        self.n_elec = n_elec
-        self.reverse = reverse
-
-        self.n_configs = get_num_configs(self.n_orb, self.n_elec)
-        if self.n_configs == 0:
-            spec = self.get_graph_spec()
-            warnings.warn(f'Graph {spec} is emtpy', RuntimeWarning)
-
-        nodes = self.get_nodes() if nodes is None else nodes
-        if self.reverse:
-            if self.n_configs != nodes[-1, -1]:
-                raise ValueError(f'Provided nodes might be indexing strings in direct order.')
-        else:
-            if self.n_configs != nodes[0, 0]:
-                raise ValueError(f'Provided nodes might be indexing strings in reverse order.')
-
+        nodes = self.get_nodes()
         self.edges = self.get_edges(nodes)
         self.offsets = self.get_offsets(self.edges)
 
+    @property
+    def n_configs(self) -> int:
+        return get_num_configs(self.n_orb, self.n_elec)
+
+    @property
+    def space_tuple(self) -> tuple[int, int]:
+        return self.n_orb, self.n_elec
+
     def get_edges(self, nodes: npt.NDArray[np.uint64], /) -> npt.NDArray[np.uint64]:
-        Y = np.zeros((self.n_elec, self.n_orb), dtype=self.dtype)
+        Y = np.zeros((self.n_elec, self.n_orb), dtype=np.uint64)
 
         e_idx, o_idx = self.get_node_idx()
         if self.reverse:
@@ -124,14 +119,14 @@ class SimpleGraph:
                         OR
                         = (#o - o choose #e - e) <--> direct
         """
-        nodes = np.zeros((self.n_elec + 1, self.n_orb + 1), dtype=self.dtype)
+        nodes = np.zeros((self.n_elec + 1, self.n_orb + 1), dtype=np.uint64)
 
         if self.reverse:
             f = lambda e, o: comb(o, e, exact=True)
         else:
             f = lambda e, o: comb(self.n_orb - o, self.n_elec - e, exact=True)
 
-        f = np.vectorize(f, otypes=[self.dtype])
+        f = np.vectorize(f, otypes=[np.uint64])
 
         idx = self.get_node_idx()
         nodes[idx] = f(*idx)
@@ -174,7 +169,7 @@ class SimpleGraph:
         config = np.asarray(config, dtype=self.config_dtype)
         config &= self.space_mask
 
-        addr = np.zeros_like(config, dtype=self.dtype)
+        addr = np.zeros_like(config, dtype=np.uint64)
 
         o = 0
         e = np.zeros_like(config)
@@ -195,7 +190,7 @@ class SimpleGraph:
         return addr
 
     def get_config(self, addr: np.ndarray) -> np.ndarray:
-        addr = np.asarray(addr, dtype=self.dtype).copy()
+        addr = np.asarray(addr, dtype=np.uint64).copy()
         config = np.zeros_like(addr, dtype=self.config_dtype)
 
         e = 0
@@ -227,26 +222,12 @@ class SimpleGraph:
         raw_mask = 2 ** self.n_orb - 1
         return self.config_dtype.type(raw_mask)
 
-        # if self.config_dtype is object:
-        #     return int((1 << self.n_orb) - 1)
-        # return (self.config_dtype.type(1) << self.config_dtype.type(self.n_orb)) - self.config_dtype.type(1)
-
     def get_graph_spec(self) -> str:
         return f'[{self.n_orb:>2d}o, {self.n_elec:>2d}e]'
 
     def __repr__(self) -> str:
         spec = self.get_graph_spec()
         return f'{self.__class__.__name__}({spec}, #Det={self.n_configs:,d})'
-
-    def __eq__(self, other: 'SimpleGraph') -> bool:
-        return self.n_orb == other.n_orb and \
-               self.n_elec == other.n_elec and \
-               self.reverse == other.reverse and \
-               self.config_dtype == other.config_dtype
-
-    @staticmethod
-    def is_valid_space(n_orb: int, n_elec: int) -> bool:
-        return n_orb >= n_elec >= 0
 
     def print_weights(self) -> NoReturn:
         # TODO: correctly implement printing of weights
@@ -263,21 +244,11 @@ class SimpleGraph:
         #         offset += 1
 
 
-class RASMOs(NamedTuple):
-    r1: int  # #MOs in RAS1
-    r2: int  # #MOs in RAS2
-    r3: int  # #MOs in RAS3
-
-
-class Electrons(NamedTuple):
-    alpha: int  # #alpha electrons
-    beta: int  # #beta electrons
-
-
 SimpleGraphs = dict[tuple[int, int], list[SimpleGraph]]
 
 
-class RASGraph:
+@attrs.define(eq=True, repr=False)
+class DASGraph:
     """Implements RAS/CAS CI string graph, using SimpleGraph class as a basis.
 
     TODO: 1c formalism
@@ -286,80 +257,156 @@ class RASGraph:
     TODO: extend to more than three ActiveSpaces (generalize spaces and restrictions)
     TODO: implement space division, merging, and other manipulations
     """
-    __slots__ = [
-        'spaces', 'elec',
-        'max_hole', 'max_elec', 'n_configs',
-        'reverse', 'cat_order',
-        'graphs', 'categories', 'cat_map',
-        'config_dtype'
-    ]
 
-    spaces: RASMOs
-    elec: Electrons
+    spaces: tuple[int, ...] = attrs.field(
+        converter=tuple,
+        validator=attrs.validators.deep_iterable(
+            member_validator=[
+                attrs.validators.instance_of(int),
+                attrs.validators.ge(0),
+            ],
+            iterable_validator=attrs.validators.instance_of(tuple),
+        )
+    )
 
-    max_hole: int
-    max_elec: int
+    reference: tuple[int, ...] = attrs.field(
+        converter=tuple,
+        validator=attrs.validators.deep_iterable(
+            member_validator=[
+                attrs.validators.instance_of(int),
+                attrs.validators.ge(0),
+            ],
+            iterable_validator=attrs.validators.instance_of(tuple),
+        )
+    )
 
-    reverse: bool
-    cat_order: Literal['F', 'C']
+    restrictions: tuple[tuple[int, int], ...] = attrs.field(  # ((1: min_e, max_e), (2: min_e, max_e), ... )
+        default=tuple,
+        converter=tuple,
+        validator=attrs.validators.deep_iterable(
+            member_validator=[
+                attrs.validators.min_len(2),
+                attrs.validators.max_len(2),
+                attrs.validators.deep_iterable(
+                    member_validator=[
+                        attrs.validators.instance_of(int),
+                        attrs.validators.ge(0),
+                    ],
+                    iterable_validator=attrs.validators.instance_of(tuple)
+                )
+            ],
+            iterable_validator=attrs.validators.instance_of(tuple),
+        )
+    )
 
-    n_configs: int
+    n_configs: int = 0
 
-    graphs: SimpleGraphs
-    categories: np.ndarray
-    cat_map: dict[tuple[int, int], int]
-    config_dtype: npt.DTypeLike
+    max_excitation_level: int = -1
+    reverse: bool = False
+    cat_order: Literal['F', 'C'] = attrs.field(default='F', converter=str, validator=attrs.validators.in_(['F', 'C']))
 
-    def __init__(self, spaces: RASMOs, elec: Electrons, max_hole: int, max_elec: int, /,
-                 reverse: bool = False, cat_order: Literal['F', 'C'] = 'F', use_python_int: bool = False):
-        assert all(r >= 0 for r in spaces)
-        assert all(e >= 0 for e in elec)
+    config_dtype: npt.DTypeLike = attrs.field()
 
-        self.spaces = spaces
-        self.elec = elec
+    @config_dtype.default
+    def _get_default_config_dtype(self) -> npt.DTypeLike:
+        if max(self.spaces) > 64:
+            return np.dtype(object)
+        return np.dtype(np.int64)
 
-        assert max_hole >= 0
-        assert max_elec >= 0
+    categories: np.ndarray = attrs.field(default=None, init=False)
+    cat_map: dict[tuple[int, int], int] = attrs.field(factory=dict, init=False)
+    graphs: SimpleGraphs = attrs.field(factory=dict, init=False)
 
-        assert max_elec <= self.n_elec
-        assert spaces.r1 >= max_hole
-        assert spaces.r1 <= self.n_elec
-        assert spaces.r3 >= max_elec
+    def __attrs_post_init__(self) -> None:
+        if len(self.spaces) != 3:
+            raise NotImplementedError()
 
-        self.max_hole = max_hole
-        self.max_elec = max_elec
+        if len(self.spaces) != len(self.restrictions) != len(self.reference):
+            raise ValueError()
 
-        assert cat_order in 'FC'
-        self.cat_order = cat_order
-        self.reverse = reverse
+        if any(e > o for e, o in zip(self.reference, self.spaces)):
+            raise ValueError('Number of electrons per space cannot exceed number of orbitals in such space')
 
-        # TODO: use numpy structured dtype in the future
-        if use_python_int:
-            warnings.warn('Using python int as config data type, expect slow performance', RuntimeWarning)
-            self.config_dtype = np.dtype(object)
-        else:
-            self.config_dtype = np.dtype(np.int64)
+        if not all(0 <= l <= u <= o for (l, u), o in zip(self.restrictions, self.spaces)):
+            raise ValueError()
 
-        self.build_graph(reverse=reverse, use_python_int=use_python_int)
+        self.build_ras_graph()
 
-    def build_graph(self, reverse: bool = False, use_python_int: bool = False) -> NoReturn:
+    @classmethod
+    def from_ras_spec(cls, spaces: tuple[int, int, int], n_elec: int, /,
+                      max_hole: int = 0, max_elec: int = 0, **kwargs) -> DASGraph:
+        reference: tuple[int, int, int] = (spaces[0], n_elec - spaces[0], 0)
+        restrictions = (
+            (reference[0] - max_hole, reference[0]),
+            (0, spaces[1]),
+            (0, max_elec)
+        )
+
+        return cls(
+            spaces=spaces,
+            reference=reference,
+            restrictions=restrictions,
+            **kwargs
+        )
+
+    @classmethod
+    def from_cas_spec(cls, n_orb: int, n_elec: int, **kwargs) -> DASGraph:
+        return cls.from_ras_spec((0, n_orb, 0), n_elec, max_hole=0, max_elec=0, **kwargs)
+
+    def to_hdf5(self, file: h5py.File, /, prefix: str = '') -> None:
+        name = '/'.join([prefix, 'graph'])
+
+        gr = file.require_group(name)
+        spaces = np.asarray(self.spaces)
+        gr.require_dataset(f'spaces', data=spaces, shape=spaces.shape, dtype=spaces.dtype)
+
+        reference = np.asarray(self.reference)
+        gr.require_dataset(f'reference', data=reference, shape=reference.shape, dtype=reference.dtype)
+
+        restrictions = np.asarray(self.restrictions)
+        gr.require_dataset(f'restrictions', data=restrictions, shape=restrictions.shape, dtype=restrictions.dtype)
+
+        gr.attrs['max_excitation_level'] = self.max_excitation_level
+        gr.attrs['reverse'] = self.reverse
+
+    @classmethod
+    def from_hdf5(cls, file: h5py.File, /, prefix: str = '') -> DASGraph:
+        name = '/'.join([prefix, 'graph'])
+        if gr := file.get(name, default=None):
+            spaces = gr.get('spaces', tuple())
+            reference = gr.get('reference', tuple())
+            restrictions = gr.get('restrictions', tuple())
+            max_excitation_level = gr.attrs.get('max_excitation_level', -1)
+            reverse = gr.attrs.get('reverse', False)
+            return cls(
+                spaces=spaces,
+                reference=reference,
+                restrictions=restrictions,
+                max_excitation_level=max_excitation_level,
+                reverse=reverse
+            )
+        raise KeyError('Graph not Found')
+
+    def build_ras_graph(self) -> NoReturn:
         # Find valid categories
-        cat_map: dict[tuple[int, int]] = defaultdict(lambda: -1)
-        for r3_ne, r1_nh in product(range(self.max_elec + 1), range(self.max_hole + 1)):
-            r1_ne = self.spaces.r1 - r1_nh
+        cat_map: SimpleGraphs = defaultdict(lambda: -1)
+
+        ras1 = self.restrictions[0]
+        ras3 = self.restrictions[2]
+        for r3_ne, r1_ne in product(range(ras3[-1] + 1), range(ras1[1], ras1[0] - 1, -1)):
             r2_ne = self.n_elec - (r1_ne + r3_ne)
             occ: tuple[int, int, int] = (r1_ne, r2_ne, r3_ne)
-            if all(SimpleGraph.is_valid_space(n_orb, n_elec)
+            if all(0 <= n_elec <= n_orb
                    for n_orb, n_elec in zip(self.spaces, occ)):
                 cat_map[(r1_ne, r3_ne)] = r2_ne
 
         # FIXME: Use numpy fields for category array, maybe use a pd.DataFrame
         n_cat = len(cat_map)
-        offsets = np.zeros(shape=(n_cat, 2 * self.n_spaces + 1), dtype=SimpleGraph.dtype)
+        offsets = np.zeros(shape=(n_cat, 2 * self.n_spaces + 1), dtype=np.uint64)
 
         graphs: SimpleGraphs = {}
         graphs_cache: dict[tuple[int, int], SimpleGraph] = {}
-        graph_kwargs = dict(reverse=reverse, use_python_int=use_python_int)
+        graph_kwargs = dict(reverse=self.reverse, config_dtype=self.config_dtype)
 
         n_configs = 0
         for cat_idx, ((r1_ne, r3_ne), r2_ne) in enumerate(cat_map.items()):
@@ -392,8 +439,16 @@ class RASGraph:
         self.cat_map = cat_map
         self.n_configs = int(n_configs)
 
+    def get_categories_df(self) -> pd.DataFrame:
+        df = pd.DataFrame(self.categories, columns=[
+            *[f'n_config_{i + 1}' for i in range(self.n_spaces)],
+            'offset',
+            *[f'n_elec_{i + 1}' for i in range(self.n_spaces)],
+        ])
+        return df
+
     def get_category_configs(self, n_holes: int, n_elec: int) -> ConfigArray:
-        cat_spec = self.spaces.r1 - n_holes, n_elec
+        cat_spec = self.spaces[0] - n_holes, n_elec
         cat_idx = self.cat_map[cat_spec]
 
         if cat_idx < 0:
@@ -424,7 +479,7 @@ class RASGraph:
         config_pop = get_elec_count(config, config_dtype=self.config_dtype)
         cat_idx = np.apply_along_axis(lambda x: self.cat_map[tuple(x)], 1, config_pop[:, (0, 2)])
 
-        addr = np.zeros_like(config, dtype=SimpleGraph.dtype)
+        addr = np.zeros_like(config, dtype=np.uint64)
         for cat in np.unique(cat_idx):
             idx = cat_idx == cat
             r1_ne, r2_ne, r3_ne = self.categories[cat, self.n_spaces + 1:2 * self.n_spaces + 1]
@@ -443,13 +498,13 @@ class RASGraph:
         return addr.sum(axis=1) + self.categories[cat_idx, 3].astype(np.uint)
 
     def get_config(self, addr: npt.ArrayLike) -> ConfigArray:
-        raveled_addr = np.asarray(addr, dtype=SimpleGraph.dtype).reshape(-1).copy()
+        raveled_addr = np.asarray(addr, dtype=np.uint64).reshape(-1).copy()
 
         cat_idx = np.searchsorted(self.categories[:, 3], raveled_addr, side='right') - 1
         raveled_addr -= self.categories[cat_idx, 3]
 
         # Unravel the address
-        addr = np.zeros((len(raveled_addr), 3), dtype=SimpleGraph.dtype)
+        addr = np.zeros((len(raveled_addr), 3), dtype=np.uint64)
         match self.cat_order:
             case 'F':
                 addr[:, 0] = raveled_addr
@@ -476,12 +531,12 @@ class RASGraph:
         config = np.asarray(config, dtype=self.config_dtype).reshape(-1, self.n_spaces)
 
         if self.is_cas:
-            return get_config_repr(config[..., 1], (self.n_mo,), config_dtype=self.config_dtype)
+            return get_config_repr(config[..., 1], (self.n_orb,), config_dtype=self.config_dtype)
 
         return get_config_repr(config, self.spaces, config_dtype=self.config_dtype)
 
     @property
-    def space_mask(self) -> npt.NDArray[SimpleGraph.dtype]:
+    def space_mask(self) -> npt.NDArray[np.uint64]:
         mask = np.asarray(self.spaces, dtype=self.config_dtype)
         if self.config_dtype is object:
             return (1 << mask) - 1
@@ -489,20 +544,16 @@ class RASGraph:
         return (self.config_dtype.type(1) << mask) - self.config_dtype.type(1)
 
     @property
-    def n_elec(self) -> int:
-        return sum(self.elec)
-
-    @property
     def n_orb(self) -> int:
         return sum(self.spaces)
 
     @property
-    def n_cat(self) -> int:
-        return len(self.categories)
+    def n_elec(self) -> int:
+        return sum(self.reference)
 
     @property
-    def n_mo(self) -> int:
-        return sum(self.spaces)
+    def n_cat(self) -> int:
+        return len(self.categories)
 
     @property
     def n_spaces(self) -> int:
@@ -510,29 +561,33 @@ class RASGraph:
 
     @property
     def is_cas(self) -> bool:
-        return self.n_mo == self.spaces[1]
+        return self.n_orb == self.spaces[1]
 
     @property
-    def is_1c(self) -> bool:
-        return self.n_elec != self.elec.alpha or \
-               self.n_elec != self.elec.beta
+    def is_ras(self) -> bool:
+        return self.n_spaces == 3
 
     def get_graph_spec(self) -> str:
         if self.is_cas:
-            spec = f'{self.n_mo}o'
+            spec = f'{self.n_orb}o'
         else:
-            restrictions = [-self.max_hole, 0, self.max_elec]
-            spec = ','. join([f'{r:>-2d}/{mo:>2d}' for r, mo in zip(restrictions, self.spaces)])
+            spec = []
+            for (l, u), e, o in zip(self.restrictions, self.reference, self.spaces):
+                if o > 0:
+                    h, p = e - l, u - e
+                    s = ''.join([f'{n:>-2d}{t}'
+                                 for n, t in zip((h, p, e), ('h', 'p', 'e'))
+                                 if n != 0 or n != o or n != e]).strip()
+                    s = f'{s}/{o:>-2d}'
+                    spec.append(s)
+            spec = ','.join(spec)
         return f'{self.n_elec}e{self.n_orb}o|{spec}'
 
     def __repr__(self) -> str:
         ras_spec = self.get_graph_spec()
         return f'{self.__class__.__name__}([{ras_spec}], #Det={self.n_configs:,d}, #Cat={self.n_cat})'
 
-    def __eq__(self, other: 'RASGraph') -> bool:
-        return self.spaces == other.spaces and \
-               self.elec == other.elec and \
-               self.max_elec == other.max_elec and \
-               self.max_elec == other.max_elec and \
-               self.reverse == other.reverse and \
-               self.cat_order == self.cat_order
+
+if __name__ == '__main__':
+    g = DASGraph.from_ras_spec((12, 50, 10), 12 + 36 + 13, max_hole=1, max_elec=1)
+    print(g)

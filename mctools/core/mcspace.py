@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-import json
 import warnings
-
-from typing import NoReturn, Callable, IO, Literal, Sequence, ClassVar, Type, TYPE_CHECKING
+from typing import NoReturn, Callable, Literal, Sequence, ClassVar, Type, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from .cistring.graphs import RASGraph, RASMOs, Electrons
+from .cistring.graphs import DASGraph
 from .cistring.utils import ConfigArray, get_elec_count
-
 
 if TYPE_CHECKING:
     from parsing.core.pattern import ParsingResultType
@@ -150,6 +147,13 @@ class MOSpacePartition:
                f'Secondary=({self.n_virtual},{self.n_frozen_virtual}))'
 
 
+
+# Useful typing definitions
+MOBlock = Sequence[int | tuple[int, int] | tuple[int, ...]] | tuple[int, ...]
+RawMOBlocks = dict[str, MOBlock]
+MOBlocks = pd.Series
+
+
 class MCSpace:
     """Active Space Definition and other info
 
@@ -165,15 +169,10 @@ class MCSpace:
         'df',
     ]
 
-    # Useful typing definitions
-    MOBlock = Sequence[int | tuple[int, int] | tuple[int, ...]] | tuple[int, ...]
-    RawMOBlocks = dict[str, MOBlock]
-    MOBlocks = pd.Series
-
     ConfigClass = dict[str, int]
     ConfigClasses = dict[str, ConfigClass]
 
-    graph: RASGraph
+    graph: DASGraph
     df: pd.DataFrame | None
 
     MO_OCC_COL = 'mo_occ'
@@ -185,7 +184,7 @@ class MCSpace:
 
     CONFIG_CLASS_COL = 'config_class'
 
-    def __init__(self, graph: RASGraph, /,
+    def __init__(self, graph: DASGraph, /,
                  df: pd.DataFrame | None = None, *,
                  mo_blocks: RawMOBlocks | None = None,
                  config_classes: ConfigClasses | None = None):
@@ -479,7 +478,7 @@ class MCSpace:
 
     @property
     def n_mo_act(self) -> int:
-        return self.graph.n_mo
+        return self.graph.n_orb
 
     @property
     def n_elec_act(self) -> int:
@@ -505,41 +504,6 @@ class MCSpace:
             labels = self.df[self.CONFIG_CLASS_COL].columns if self.CONFIG_CLASS_COL in self.df else []
         return np.asarray(labels, dtype=np.str_)
 
-    def to_dict(self) -> dict:
-        return dict(
-            ras=tuple(self.graph.spaces),
-            elec=tuple(self.graph.elec),
-            max_hole=self.graph.max_hole,
-            max_elec=self.graph.max_elec,
-            mo_blocks=self.mo_blocks,
-            config_classes=self.config_classes,
-        )
-
-    def to_json(self, fp: str | IO, **kwargs) -> NoReturn:
-        data = self.to_dict()
-
-        match fp:
-            case str(filename):
-                with open(filename, 'w') as f:
-                    json.dump(data, f, **kwargs)
-            case IO(fp):
-                json.dump(data, fp, **kwargs)
-            case _:
-                raise ValueError('Invalid fp')
-
-    @classmethod
-    def from_json(cls, fp: str | IO, **kwargs) -> 'MCSpace':
-        match fp:
-            case str(filename):
-                with open(filename, 'r') as f:
-                    data = json.load(f, **kwargs)
-            case IO(fp):
-                data = json.load(fp, **kwargs)
-            case _:
-                raise ValueError('Invalid fp')
-
-        return cls.from_dict(data)
-
     @classmethod
     def from_dict(cls, data: ParsingResultType, /,
                   active_spaces_key: str = 'active_spaces',
@@ -556,7 +520,7 @@ class MCSpace:
             data.update(kwargs)
 
             instance = data.setdefault(
-                instance_key, cls.from_space_spec(
+                instance_key, cls.from_ras_spec(
                     data.pop(active_spaces_key),
                     data.pop(active_elec_key),
                     data.pop(max_hole_key), data.pop(max_elec_key),
@@ -568,30 +532,9 @@ class MCSpace:
         return instance
 
     @classmethod
-    def from_space_spec(cls, ras: RASMOs | tuple[int, int, int] | list[int] | int,
-                        elec: Electrons | tuple[int, int] | list[int] | int, /,
-                        max_hole: int = 0, max_elec: int = 0,  **kwargs) -> 'MCSpace':
-        match ras:
-            case int(cas):
-                ras = RASMOs(0, cas, 0)
-            case int(r1), int(r2), int(r3):
-                ras = RASMOs(r1, r2, r3)
-            case _:
-                raise ValueError('Incorrect RAS MOs')
-
-        match elec:
-            case int(e):
-                elec = Electrons(e, 0)
-            case int(e_a), int(e_b):
-                elec = Electrons(e_a, e_b)
-            case _:
-                raise ValueError('Incorrect Electrons')
-
-        graph_kwargs = {k: kwargs.pop(k)
-                        for k in ['reverse', 'cat_order', 'use_python_int']
-                        if k in kwargs}
-
-        graph = RASGraph(ras, elec, max_hole, max_elec, **graph_kwargs)
+    def from_ras_spec(cls, ras: tuple[int, int, int], elec: int, /,
+                      max_hole: int = 0, max_elec: int = 0, **kwargs) -> 'MCSpace':
+        graph = DASGraph.from_ras_spec(ras, elec, max_hole, max_elec)
         return cls(graph, **kwargs)
 
     def __repr__(self) -> str:
