@@ -17,19 +17,24 @@ __all__ = [
 class GaussianSuffixes(StrEnum):
     log = '.log'
     fchk = '.fchk'
+    chk = '.chk'
+    ci = '.ci'
 
 
 def parse_gaussian_calc(filenames: Sequence[pathlib.Path], requested: Resource) -> dict[Resource, Any]:
     storage: dict[Resource, Any] = {}
     for filename in filenames:
         suffix = filename.suffix
-        match GaussianSuffixes(suffix):
-            case GaussianSuffixes.log:
+        match suffix:
+            case GaussianSuffixes.log.value:
                 parser = LogParser(requested=requested)
-            case GaussianSuffixes.fchk:
+            case GaussianSuffixes.fchk.value:
                 parser = FchkParser(requested=requested)
+            case GaussianSuffixes.ci.value | GaussianSuffixes.chk.value:
+                console.print(f'Parsing of {suffix} is not implemented', style='red')
+                continue
             case _:
-                console.print(f'Unrecognized file extension: {suffix}', style='red')
+                console.print(f'Unrecognized suffix {suffix}', style='red')
                 continue
 
         with open(filename, 'r') as f:
