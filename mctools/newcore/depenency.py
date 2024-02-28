@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-
 import abc
-from graphlib import TopologicalSorter
-
 from typing import TypeVar, Generic, Type, Protocol, Any, Sequence, Self
 
 import attrs

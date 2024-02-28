@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from typing import AnyStr, TypeAlias, ClassVar
+from collections import defaultdict
+from typing import AnyStr, ClassVar
 
 import attrs
 import numpy as np
-from numpy import ndarray, dtype
 
 from mctools.cli.console import console
 from mctools.core.resource import Resource
+from mctools.core.basis import MolecularOrbitalAnsatz
 
 from ..core.error import AnchorNotFound
 from ..core.parser import Parser, FWP
@@ -38,10 +39,8 @@ GAUSSIAN_ML_AO: dict[str, list[int]] = {
     'H': [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5],
 }
 
-ScalarType: TypeAlias = np.float_ | np.int_ | np.str_
 
-
-def process_data_type(char: str, /) -> ScalarType:
+def process_data_type(char: str, /) -> np.float_ | np.int_ | np.str_:
     match char:
         case 'R':
             return np.float_
@@ -73,7 +72,7 @@ class FchkParser(Parser):
 
     MethodPatt: ClassVar[ProcessedPattern] = ProcessedPattern(
         r'(?P<calc>[a-zA-Z]+)\s*'
-        r'(?P<method>(?P<mo_anzats>R|RO|U|G)\w+)'
+        r'(?P<method>(?P<mo_ansatz>R|RO|U|G)\w+)'
         r'\s*(?P<basis_name>\w+)'
     )
 
@@ -120,11 +119,20 @@ class FchkParser(Parser):
         result = {}
 
         info = self.read_description()
-        mo_anzats = info['mo_anzats']
-        result.update({Resource.mo_basis_ansatz: np.asarray(mo_anzats, dtype='S')})
+        match info['mo_ansatz']:
+            case 'R' | 'RO':
+                mo_ansatz = MolecularOrbitalAnsatz['RR']
+            case 'U':
+                mo_ansatz = MolecularOrbitalAnsatz['RU']
+            case 'G':
+                mo_ansatz = MolecularOrbitalAnsatz['GU']
+            case _:
+                mo_ansatz = MolecularOrbitalAnsatz['GU']
+
+        result.update({Resource.mo_basis_ansatz: mo_ansatz})
 
         charge = self.read_scalar('Charge')
-        result.update({Resource.mol_charge: np.asarray(charge)})
+        result.update({Resource.mol_multiplicity: np.asarray(charge)})
 
         multiplicity = self.read_scalar('Multiplicity')
         result.update({Resource.mol_charge: np.asarray(multiplicity)})
@@ -137,7 +145,7 @@ class FchkParser(Parser):
         result.update(self.read_molecular_geometry())
         result.update(self.read_basis())
 
-        result.update(self.read_molecular_orbitals(n_ao, mo_anzats))
+        result.update(self.read_molecular_orbitals(n_ao, mo_ansatz))
 
         console.print('Finished parsing FCHK file')
         return result, self.stepper.return_file()
@@ -177,41 +185,56 @@ class FchkParser(Parser):
         primitive_exponents = self.read_array('Primitive exponents')
         contraction_coeffs = self.read_array('Contraction coefficients')
         primitives = {
-            Resource.ao_prim_coef: contraction_coeffs,
-            Resource.ao_prim_exp: primitive_exponents,
+            Resource.ao_basis_prims_coef: contraction_coeffs,
+            Resource.ao_basis_prims_exp: primitive_exponents,
         }
 
         shell_coords = self.read_array('Coordinates of each shell')
         shell_coords = shell_coords.reshape((-1, 3))
 
         shells = {
-            Resource.ao_shell_atom: shell2atom,
-            Resource.ao_shell_size: shell_size,
-            Resource.ao_shell_l: np.asarray([GAUSSIAN_SHELL_TYPES[c] for c in shell_code], dtype='S'),
-            Resource.ao_shell_coords: shell_coords,
+            Resource.ao_basis_shells_coords: shell_coords,
+            Resource.ao_basis_shells_atom: shell2atom,
+            Resource.ao_basis_shells_size: shell_size,
+            Resource.ao_basis_shells_ang: np.asarray([GAUSSIAN_SHELL_TYPES[c] for c in shell_code], dtype='S'),
         }
 
-        return shells | primitives
+        # Atomic Orbitals information
+        aos = defaultdict(list)
+        for shell_idx, (code, atom_idx) in enumerate(zip(shell_code, shell2atom)):
+            for shell_part in GAUSSIAN_SHELL_TYPES[code]:
+                mls = GAUSSIAN_ML_AO[shell_part.capitalize()]
+                l = np.max(mls)
+                n_ao_per_shell = len(mls)
 
-    def read_molecular_orbitals(self, n_ao: int, mo_anzats: str) -> dict[Resource, np.ndarray]:
+                aos[Resource.ao_basis_atom].extend([atom_idx] * n_ao_per_shell)
+                aos[Resource.ao_basis_shell].extend([shell_idx] * n_ao_per_shell)
+                aos[Resource.ao_basis_l].extend([l] * n_ao_per_shell)
+                aos[Resource.ao_basis_ml].extend(mls)
+
+        atomic_orbitals = {r: np.asarray(arr) for r, arr in aos.items()}
+        return primitives | shells | atomic_orbitals
+
+    def read_molecular_orbitals(self, n_ao: int, mo_ansatz: str) -> dict[Resource, np.ndarray]:
         console.print('Parsing Molecular Orbital Basis...')
 
         molorb_raw_a = self.read_array('Alpha MO coefficients')
 
-        match mo_anzats:
-            case 'R':
+        match mo_ansatz:
+            case MolecularOrbitalAnsatz.RR:
                 molorb = molorb_raw_a.reshape(n_ao, n_ao)
-            case 'U':
+            case MolecularOrbitalAnsatz.RU:
                 molorb_raw_b = self.read_array('Beta MO coefficients')
                 molorb = np.zeros((n_ao * 2, n_ao), dtype=np.float_)
                 molorb[:n_ao] = molorb_raw_a.reshape(n_ao, n_ao)
                 molorb[n_ao:] = molorb_raw_b.reshape(n_ao, n_ao)
-            case 'G':
+            case MolecularOrbitalAnsatz.GU:
                 molorb = molorb_raw_a[0::2] + molorb_raw_a[1::2] * 1.j
-                molorb = molorb.reshape(-1, n_ao * 2)  # (#MOs, #AOs)
+                molorb = molorb.reshape(-1, 2, n_ao)  # (#MOs, #AOs)
+                molorb = np.transpose(molorb, (0, 2, 1))
             case _:
                 raise ValueError(f'Invalid MO restriction '
-                                 f'is specified: {mo_anzats}')
+                                 f'is specified: {mo_ansatz}')
 
         return {Resource.mo_basis_molorb: molorb}
 
@@ -221,7 +244,7 @@ class FchkParser(Parser):
         patt = self.FCHK_SCALAR_PATT.update_pattern(header)
         return patt.match(self.stepper.fwp.last_line)
 
-    def read_array(self, header: str) -> ndarray[ScalarType, dtype[ScalarType]]:
+    def read_array(self, header: str) -> np.ndarray:
         anchor_in = self.stepper.get_anchor_predicate(header)
         self.stepper.step_to(anchor_in, check_last_read=True, on_eof='raise')
         patt = self.FCHK_ARRAY_PATT.update_pattern(header)

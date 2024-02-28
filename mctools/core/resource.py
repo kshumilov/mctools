@@ -12,6 +12,7 @@ __all__ = [
 @unique
 class Resource(Flag):
     # Geometry & Molecular information
+
     mol_atcoords = auto()
     mol_atnums = auto()
     mol_charge = auto()
@@ -20,15 +21,21 @@ class Resource(Flag):
 
     # Atomic Orbital basis
     ao_basis = auto()
-    ao_prim_coef = auto()
-    ao_prim_exp = auto()
+    ao_basis_shell = auto()
+    ao_basis_atom = auto()
+    ao_basis_l = auto()
+    ao_basis_ml = auto()
 
-    ao_shell_coords = auto()
-    ao_shell_size = auto()
-    ao_shell_atom = auto()
-    ao_shell_l = auto()
+    ao_basis_prims_coef = auto()
+    ao_basis_prims_exp = auto()
+
+    ao_basis_shells_coords = auto()
+    ao_basis_shells_size = auto()
+    ao_basis_shells_atom = auto()
+    ao_basis_shells_ang = auto()
 
     # MO Basis
+    mo_basis = auto()
     mo_basis_molorb = auto()
     mo_basis_ansatz = auto()
 

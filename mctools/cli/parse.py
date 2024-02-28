@@ -7,7 +7,7 @@ from rich_click import RichCommand
 
 from mctools.parsing.utils import (
     parse_calculation,
-    group_calculations,
+    group_files,
     CalculationGroups,
     ParsingBackend
 )
@@ -50,7 +50,7 @@ def sequential_parse(groups: CalculationGroups, ext: str) -> None:
     help='Name of the archive extension',
 )
 def parse(filenames: Sequence[pathlib.Path], n_cpu: int, ext: str,) -> None:
-    groups = group_calculations(filenames)
+    groups = group_files(filenames)
 
     if len(groups) <= 1 or n_cpu == 1:
         sequential_parse(groups, ext)
