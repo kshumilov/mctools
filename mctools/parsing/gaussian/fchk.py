@@ -230,7 +230,7 @@ class FchkParser(Parser):
                 molorb[n_ao:] = molorb_raw_b.reshape(n_ao, n_ao)
             case MolecularOrbitalAnsatz.GU:
                 molorb = molorb_raw_a[0::2] + molorb_raw_a[1::2] * 1.j
-                molorb = molorb.reshape(-1, 2, n_ao)  # (#MOs, #AOs)
+                molorb = molorb.reshape(-1, n_ao, 2)  # (#MOs, #AOs)
                 molorb = np.transpose(molorb, (0, 2, 1))
             case _:
                 raise ValueError(f'Invalid MO restriction '

@@ -11,7 +11,7 @@ __all__ = [
     'g_e', 'alpha',
 
     'Eh2eV', 'eV2Eh', 'wn2eV',
-    'sigma_0', 'sigma_x', 'sigma_y', 'sigma_z', 'sigma_vector', 'pauli_vector',
+    'I2', 'SX', 'SY', 'SZ', 'SIGMA_VECTOR', 'PAULI_VECTOR',
 
     'PeriodicTable',
 
@@ -30,11 +30,11 @@ wn2eV = 1.23981e-4
 Bh2Ang = 0.529177249
 PeriodicTable = pd.read_csv(os.path.join(os.path.dirname(__file__), 'periodic_table.csv')).set_index('AtomicNumber')
 
-sigma_0 = np.eye(2)
-sigma_z = np.asarray([[1, 0], [0, -1]])
-sigma_x = np.asarray([[0, 1], [1,  0]])
-sigma_y = 1j * np.asarray([[0, -1], [1,  0]])
-sigma_vector = np.stack([sigma_x, sigma_y, sigma_z])
-pauli_vector = np.stack([sigma_0, sigma_x, sigma_y, sigma_z])
+I2 = np.eye(2)
+SZ = np.asarray([[1, 0], [0, -1]])
+SX = np.asarray([[0, 1], [1, 0]])
+SY = 1j * np.asarray([[0, -1], [1, 0]])
+SIGMA_VECTOR = np.stack([SX, SY, SZ])
+PAULI_VECTOR = np.stack([I2, SX, SY, SZ])
 
 ANGULAR_MOMENTUM_SYMBS = np.asarray(['S', 'P', 'D', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'])

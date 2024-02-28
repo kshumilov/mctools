@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from enum import StrEnum, IntEnum, unique, Enum, auto
+from enum import StrEnum, IntEnum, unique, auto
 from typing import ClassVar, TypeAlias, Any
 
 import attr
@@ -10,10 +10,10 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from mctools.core.resource import Resource
 from mctools.cli.console import console
+from mctools.core.resource import Resource
 
-from .utils.constants import PeriodicTable
+from .utils.constants import PeriodicTable, I2, ANGULAR_MOMENTUM_SYMBS
 
 __all__ = [
     'AtomicOrbitalAnsatz',
@@ -60,7 +60,9 @@ class AtomicOrbitalBasis:
     class Col(StrEnum):
         shell_idx = auto()
         atom_idx = auto()
-        l = auto()
+        atom = auto()
+        l = 'l'
+        L = 'L'
         ml = auto()
         element = auto()
         x = auto()
@@ -108,7 +110,9 @@ class AtomicOrbitalBasis:
     def n_ao(self) -> int:
         return len(self.df)
 
-    @property
+    def get_metric(self) -> np.ndarray:
+        return self.integrals['overlap']
+
     def __len__(self) -> int:
         return len(self.df)
 
@@ -118,6 +122,8 @@ class AtomicOrbitalBasis:
     @classmethod
     def from_resources(cls, storage: Storage) -> AtomicOrbitalBasis:
         df = cls.build_df(storage)
+
+        console.log(df.columns)
 
         # TODO: Validate Integrals
         integrals = {}
@@ -146,9 +152,11 @@ class AtomicOrbitalBasis:
 
         atomic_numbers = storage[Resource.mol_atnums]
         df[cls.Col.element.value] = PeriodicTable.loc[atomic_numbers[df[cls.Col.atom_idx.value]], 'Symbol'].values
+        df[cls.Col.L.value] = ANGULAR_MOMENTUM_SYMBS[df[cls.Col.l.value]]
 
         shell_coords = storage[Resource.ao_basis_shells_coords]
         df[cls.Col.get_xyz()] = shell_coords[df[cls.Col.shell_idx.value]]
+        df[cls.Col.atom.value] = df[cls.Col.element.value] + df[cls.Col.atom_idx.value].astype(np.str_)
 
         df[cls.RESOURCE_IDX_COL] = np.arange(len(df))
         df.index.name = 'ao_idx'
@@ -179,6 +187,9 @@ class AtomicOrbitalBasis:
         # TODO: Validate Columns
         df_dict = {}
         for col_name, col in gr.items():
+            col = np.asarray(col)
+            if col.dtype.kind == 'S':
+                col = col.astype('U')
             df_dict[col_name] = col
 
         df = pd.DataFrame.from_dict(df_dict)
@@ -214,7 +225,7 @@ class MolecularOrbitalBasis:
     RESOURCE_IDX_COL: ClassVar[str] = 'resource_idx'
 
     class Col(StrEnum):
-        is_occupied = auto()
+        occupied = auto()
         active_space = auto()
 
         @classmethod
@@ -223,7 +234,7 @@ class MolecularOrbitalBasis:
 
         @classmethod
         def required(cls) -> list[str]:
-            return [v.value for v in [cls.is_occupied]]
+            return [v.value for v in [cls.occupied.value]]
 
     df: pd.DataFrame = attr.field(validator=attr.validators.instance_of(pd.DataFrame), repr=False)
 
@@ -241,21 +252,89 @@ class MolecularOrbitalBasis:
         match self.ansatz:
             case MolecularOrbitalAnsatz.GU:
                 assert self.molorb.ndim == 3
-                assert self.molorb.shape[-1] == 2
+                assert self.molorb.shape[-2] == 2
             case _:
                 raise NotImplementedError()
 
         if self.ao_basis is not None:
-            assert self.ao_basis.n_ao == self.molorb.shape[1]
-            assert 2 == self.molorb.shape[-1]
+            assert self.ao_basis.n_ao == self.molorb.shape[-1]
+            assert 2 == self.molorb.shape[-2]
 
     @property
     def n_mo(self) -> int:
         return len(self.df)
 
     @property
+    def n_occ(self) -> int:
+        return sum(self.df[self.Col.occupied.value])
+
+    @property
+    def molorb_occ(self) -> np.ndarray:
+        return self.molorb[:self.n_occ]
+
+    @property
+    def n_vir(self) -> int:
+        return self.n_mo - self.n_occ
+
+    @property
+    def molorb_vir(self) -> np.ndarray:
+        return self.molorb[self.n_vir]
+
     def __len__(self) -> int:
         return len(self.df)
+
+    def get_partitioning(self, /, by: list[str] = None, idx: slice | None = None, save=True) -> pd.DataFrame:
+        idx = idx or np.s_[:self.n_occ]
+        by = by or [self.ao_basis.Col.atom.value, self.ao_basis.Col.L.value]
+
+        S = self.get_metric()
+        match self.ansatz:
+            case MolecularOrbitalAnsatz.RR | MolecularOrbitalAnsatz.GU | MolecularOrbitalAnsatz.CR:
+                C = self.molorb[idx]
+            case MolecularOrbitalAnsatz.RU:
+                raise NotImplementedError()
+
+        F = []
+        fragments = self.ao_basis.df[by].drop_duplicates().reset_index(drop=True)
+        for i, fragment in fragments.iterrows():
+            p = np.full(self.ao_basis.n_ao, True, dtype=np.bool_)
+            for col, value in fragment.items():
+                p &= self.ao_basis.df[col] == value
+            F.append(np.outer(p, p) * S)
+        F = np.stack(F)
+
+        I = np.einsum('pat,Ftv,ab,pbv->Fp', C, F, I2, C.conj(), optimize='optimal')
+
+        if save:
+            labels = fragments[by].apply(lambda r: '_'.join(r[by]), axis=1)
+            df = pd.DataFrame(I.T, columns=labels)
+            self.df = pd.concat([self.df, df], axis=1)
+
+        I = pd.DataFrame(I, columns=[f'MO{p}' for p in range(1, I.shape[-1] + 1)])
+        return pd.concat([fragments, I], axis=1)
+
+    def get_density(self, idx: slice | None = None) -> np.ndarray:
+        idx = idx or np.s_[:self.n_occ]
+        match self.ansatz:
+            case MolecularOrbitalAnsatz.RR | MolecularOrbitalAnsatz.GU | MolecularOrbitalAnsatz.CR:
+                C = self.molorb[idx]
+            case MolecularOrbitalAnsatz.RU:
+                raise NotImplementedError()
+
+        return np.einsum('pat,qbv,ab->tv', C, C.conj(), I2, optimize='optimal')
+
+    def get_overlap(self, idx: slice | None = None) -> np.ndarray:
+        match self.ansatz:
+            case MolecularOrbitalAnsatz.RR | MolecularOrbitalAnsatz.GU | MolecularOrbitalAnsatz.CR:
+                C = self.molorb[idx]
+            case MolecularOrbitalAnsatz.RU:
+                raise NotImplementedError()
+
+        S = self.get_metric()
+        return np.einsum('pat,tv,qbv,ab->pq', C, S, C.conj(), I2, optimize='optimal')
+
+    def get_metric(self) -> np.ndarray:
+        return self.ao_basis.get_metric()
 
     @classmethod
     def from_resources(cls, storage: Storage) -> MolecularOrbitalBasis:
@@ -271,11 +350,11 @@ class MolecularOrbitalBasis:
     def build_df(cls, storage: Storage) -> pd.DataFrame:
         n_elec = storage[Resource.mol_nelec]
         n_mo = storage[Resource.mo_basis_molorb].shape[0]
-        is_occupied = np.full(n_mo, False, dtype=np.bool_)
-        is_occupied[:n_elec] = True
+        occupied = np.full(n_mo, False, dtype=np.bool_)
+        occupied[:n_elec] = True
 
         df_dict = {
-            cls.Col.is_occupied.name: is_occupied,
+            cls.Col.occupied.name: occupied,
         }
 
         df = pd.DataFrame.from_dict(df_dict)
@@ -302,6 +381,36 @@ class MolecularOrbitalBasis:
         )
 
         self.ao_basis.to_hdf5(file, prefix=prefix)
+
+    @classmethod
+    def from_hdf5(cls, file: h5py.File, /, prefix: str = '') -> MolecularOrbitalBasis:
+        gr = file.get('/'.join([prefix, 'mo', 'basis']))
+        if gr is None:
+            raise KeyError('No molecular orbital basis')
+
+        ansatz = MolecularOrbitalAnsatz[gr.attrs['ansatz']]
+
+        gr = file.require_group('/'.join([prefix, 'mo', 'basis', 'df']))
+        if gr is None:
+            raise KeyError('No molecular orbital df')
+
+        df_dict = {}
+        for col_name, col in gr.items():
+            col = np.asarray(col)
+            if col.dtype.kind == 'S':
+                col = col.astype('U')
+            df_dict[col_name] = col
+        df = pd.DataFrame.from_dict(df_dict)
+
+        ds = file.get('/'.join([prefix, 'mo', 'molorb']))
+        if gr is None:
+            raise KeyError('No molecular orbital coefficients')
+
+        molorb = np.asarray(ds)
+        ao_basis = AtomicOrbitalBasis.from_hdf5(file, prefix=prefix)
+
+        return cls(df, molorb=molorb, ao_basis=ao_basis, ansatz=ansatz)
+
 
     @classmethod
     def get_build_resources(cls) -> Resource:
