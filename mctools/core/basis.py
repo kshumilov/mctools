@@ -123,8 +123,6 @@ class AtomicOrbitalBasis:
     def from_resources(cls, storage: Storage) -> AtomicOrbitalBasis:
         df = cls.build_df(storage)
 
-        console.log(df.columns)
-
         # TODO: Validate Integrals
         integrals = {}
         for r in Resource.STV():
@@ -283,7 +281,7 @@ class MolecularOrbitalBasis:
     def __len__(self) -> int:
         return len(self.df)
 
-    def get_partitioning(self, /, by: list[str] = None, idx: slice | None = None, save=True) -> pd.DataFrame:
+    def get_partitioning(self, /, by: list[str] = None, idx: slice | None = None, save: bool = False) -> pd.DataFrame:
         idx = idx or np.s_[:self.n_occ]
         by = by or [self.ao_basis.Col.atom.value, self.ao_basis.Col.L.value]
 

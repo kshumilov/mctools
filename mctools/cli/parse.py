@@ -3,7 +3,7 @@ import multiprocessing
 from typing import Sequence
 
 import click
-from rich_click import RichCommand
+from rich_click import RichCommand, RichGroup
 
 from mctools.parsing.utils import (
     parse_calculation,
@@ -24,9 +24,9 @@ def sequential_parse(groups: CalculationGroups, ext: str) -> None:
 
 
 @click.command(
-    name='parse',
+    name='gaussian',
     cls=RichCommand,
-    help='Parsing utilities'
+    help='Parse a Gaussian Output files such Log, Fchk, and RWFDump'
 )
 @click.option(
     '-j', '--cpu', 'n_cpu',
@@ -49,7 +49,7 @@ def sequential_parse(groups: CalculationGroups, ext: str) -> None:
     show_default=True,
     help='Name of the archive extension',
 )
-def parse(filenames: Sequence[pathlib.Path], n_cpu: int, ext: str,) -> None:
+def gaussian(filenames: Sequence[pathlib.Path], n_cpu: int, ext: str,) -> None:
     groups = group_files(filenames)
 
     if len(groups) <= 1 or n_cpu == 1:
@@ -61,3 +61,15 @@ def parse(filenames: Sequence[pathlib.Path], n_cpu: int, ext: str,) -> None:
             (g, None, ParsingBackend.Gaussian, True, ext, True)
             for g in groups.values()
         ])
+
+
+@click.group(
+    cls=RichGroup,
+    name='parse',
+    help='Parsing utilities'
+)
+def parse():
+    pass
+
+
+parse.add_command(gaussian)
