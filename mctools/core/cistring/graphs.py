@@ -13,6 +13,8 @@ import pandas as pd
 from scipy.special import comb
 
 from mctools.core.cistring.utils import *
+from mctools.newcore.consolidator import Archived
+from mctools.newcore.metadata import MCTOOLS_METADATA_KEY
 
 __all__ = [
     'SimpleGraph',
@@ -65,7 +67,7 @@ class SimpleGraph:
             return np.dtype(object)
         return np.dtype(np.int64)
 
-    max_norb: float |  int = attrs.field()
+    max_norb: float | int = attrs.field()
 
     @max_norb.default
     def _get_default_max_norb(self) -> int | float:
@@ -248,7 +250,7 @@ SimpleGraphs = dict[tuple[int, int], list[SimpleGraph]]
 
 
 @attrs.define(eq=True, repr=False)
-class DASGraph:
+class DASGraph(Archived):
     """Implements RAS/CAS CI string graph, using SimpleGraph class as a basis.
 
     TODO: 1c formalism
@@ -257,32 +259,39 @@ class DASGraph:
     TODO: extend to more than three ActiveSpaces (generalize spaces and restrictions)
     TODO: implement space division, merging, and other manipulations
     """
+    ROOT: ClassVar[str] = "ci/graph"
 
     spaces: tuple[int, ...] = attrs.field(
-        converter=tuple,
+        converter=lambda s: tuple(map(int, s)),
         validator=attrs.validators.deep_iterable(
             member_validator=[
                 attrs.validators.instance_of(int),
                 attrs.validators.ge(0),
             ],
             iterable_validator=attrs.validators.instance_of(tuple),
-        )
+        ),
+        metadata={MCTOOLS_METADATA_KEY: {
+            "to_hdf5": np.asarray,
+        }}
     )
 
     reference: tuple[int, ...] = attrs.field(
-        converter=tuple,
+        converter=lambda s: tuple(map(int, s)),
         validator=attrs.validators.deep_iterable(
             member_validator=[
                 attrs.validators.instance_of(int),
                 attrs.validators.ge(0),
             ],
             iterable_validator=attrs.validators.instance_of(tuple),
-        )
+        ),
+        metadata={MCTOOLS_METADATA_KEY: {
+            "to_hdf5": np.asarray,
+        }}
     )
 
     restrictions: tuple[tuple[int, int], ...] = attrs.field(  # ((1: min_e, max_e), (2: min_e, max_e), ... )
         default=tuple,
-        converter=tuple,
+        converter=lambda s: tuple(map(lambda t: tuple(map(int, t)), s)),
         validator=attrs.validators.deep_iterable(
             member_validator=[
                 attrs.validators.min_len(2),
@@ -296,16 +305,25 @@ class DASGraph:
                 )
             ],
             iterable_validator=attrs.validators.instance_of(tuple),
-        )
+        ),
+        metadata={MCTOOLS_METADATA_KEY: {
+            "to_hdf5": np.asarray,
+        }}
     )
-
-    n_configs: int = 0
 
     max_excitation_level: int = -1
     reverse: bool = False
-    cat_order: Literal['F', 'C'] = attrs.field(default='F', converter=str, validator=attrs.validators.in_(['F', 'C']))
+    cat_order: Literal['F', 'C'] = attrs.field(
+        default='F',
+        converter=str,
+        validator=attrs.validators.in_(['F', 'C'])
+    )
 
-    config_dtype: npt.DTypeLike = attrs.field()
+    config_dtype: npt.DTypeLike = attrs.field(
+        metadata={MCTOOLS_METADATA_KEY: {
+            "ignore_hdf5": np.asarray,
+        }}
+    )
 
     @config_dtype.default
     def _get_default_config_dtype(self) -> npt.DTypeLike:
@@ -316,6 +334,7 @@ class DASGraph:
     categories: np.ndarray = attrs.field(default=None, init=False)
     cat_map: dict[tuple[int, int], int] = attrs.field(factory=dict, init=False)
     graphs: SimpleGraphs = attrs.field(factory=dict, init=False)
+    n_configs: int = attrs.field(default=0, init=False)
 
     def __attrs_post_init__(self) -> None:
         if len(self.spaces) != 3:
@@ -353,39 +372,39 @@ class DASGraph:
     def from_cas_spec(cls, n_orb: int, n_elec: int, **kwargs) -> DASGraph:
         return cls.from_ras_spec((0, n_orb, 0), n_elec, max_hole=0, max_elec=0, **kwargs)
 
-    def to_hdf5(self, file: h5py.File, /, prefix: str = '') -> None:
-        name = '/'.join([prefix, 'graph'])
+    # def to_hdf5(self, file: h5py.File, /, prefix: str = '') -> None:
+    #     name = '/'.join([prefix, 'graph'])
+    #
+    #     gr = file.require_group(name)
+    #     spaces = np.asarray(self.spaces)
+    #     gr.require_dataset(f'spaces', data=spaces, shape=spaces.shape, dtype=spaces.dtype)
+    #
+    #     reference = np.asarray(self.reference)
+    #     gr.require_dataset(f'reference', data=reference, shape=reference.shape, dtype=reference.dtype)
+    #
+    #     restrictions = np.asarray(self.restrictions)
+    #     gr.require_dataset(f'restrictions', data=restrictions, shape=restrictions.shape, dtype=restrictions.dtype)
+    #
+    #     gr.attrs['max_excitation_level'] = self.max_excitation_level
+    #     gr.attrs['reverse'] = self.reverse
 
-        gr = file.require_group(name)
-        spaces = np.asarray(self.spaces)
-        gr.require_dataset(f'spaces', data=spaces, shape=spaces.shape, dtype=spaces.dtype)
-
-        reference = np.asarray(self.reference)
-        gr.require_dataset(f'reference', data=reference, shape=reference.shape, dtype=reference.dtype)
-
-        restrictions = np.asarray(self.restrictions)
-        gr.require_dataset(f'restrictions', data=restrictions, shape=restrictions.shape, dtype=restrictions.dtype)
-
-        gr.attrs['max_excitation_level'] = self.max_excitation_level
-        gr.attrs['reverse'] = self.reverse
-
-    @classmethod
-    def from_hdf5(cls, file: h5py.File, /, prefix: str = '') -> DASGraph:
-        name = '/'.join([prefix, 'graph'])
-        if gr := file.get(name, default=None):
-            spaces = gr.get('spaces', tuple())
-            reference = gr.get('reference', tuple())
-            restrictions = gr.get('restrictions', tuple())
-            max_excitation_level = gr.attrs.get('max_excitation_level', -1)
-            reverse = gr.attrs.get('reverse', False)
-            return cls(
-                spaces=spaces,
-                reference=reference,
-                restrictions=restrictions,
-                max_excitation_level=max_excitation_level,
-                reverse=reverse
-            )
-        raise KeyError('Graph not Found')
+    # @classmethod
+    # def from_hdf5(cls, file: h5py.File, /, prefix: str = '') -> DASGraph:
+    #     name = '/'.join([prefix, 'graph'])
+    #     if gr := file.get(name, default=None):
+    #         spaces = gr.get('spaces', tuple())
+    #         reference = gr.get('reference', tuple())
+    #         restrictions = gr.get('restrictions', tuple())
+    #         max_excitation_level = gr.attrs.get('max_excitation_level', -1)
+    #         reverse = gr.attrs.get('reverse', False)
+    #         return cls(
+    #             spaces=spaces,
+    #             reference=reference,
+    #             restrictions=restrictions,
+    #             max_excitation_level=max_excitation_level,
+    #             reverse=reverse
+    #         )
+    #     raise KeyError('Graph not Found')
 
     def build_ras_graph(self) -> NoReturn:
         # Find valid categories
