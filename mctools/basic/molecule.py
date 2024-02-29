@@ -4,9 +4,10 @@ from typing import ClassVar, Sequence, Self
 
 import attrs
 
-from mctools.core.resource import Resource
-from newcore.consolidator import Analyzer
-from ..newcore.consolidator import Consolidator, Datum
+from newcore.resource import Resource
+from newcore.analyzer import Analyzer
+from ..newcore.consolidator import Consolidator
+from newcore.datum import Datum
 from ..newcore.metadata import (
     MCTOOLS_METADATA_KEY,
     DFFieldMetadata,
@@ -99,7 +100,7 @@ class Atom(Datum):
 @attrs.define
 class Molecule(Consolidator):
     DatumClass: ClassVar[type[Atom]] = Atom
-    ResourceLabel: ClassVar[Resource] = Resource.mol
+    RESOURCE: ClassVar[Resource] = Resource.mol
 
     n_elec: int = attrs.field(
         converter=int,

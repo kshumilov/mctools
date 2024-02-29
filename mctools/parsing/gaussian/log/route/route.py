@@ -7,7 +7,7 @@ from typing import TypeAlias, MutableMapping, Iterator, Sequence
 
 import attrs
 
-from mctools.core.resource import Resource
+from mctools.newcore.resource import Resource
 
 
 @unique
@@ -151,7 +151,7 @@ class Route:
         resources = Resource.NONE()
 
         if iops[17] > 0:
-            resources |= Resource.ci_energy | Resource.ci_vecs
+            resources |= Resource.ci_energies | Resource.ci_vecs
 
         if iops[18] > 0:
             resources |= Resource.ci_sa_weights

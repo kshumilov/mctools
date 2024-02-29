@@ -5,9 +5,8 @@ from typing import Optional, Iterator
 import numpy as np
 from scipy import sparse
 
-from ..core import ProcessedPattern
-from ..core.pattern import int_patt
-from ..oldlib import search_in_file
+from ...core.pattern import ProcessedPattern, int_patt
+from ...oldlib import search_in_file
 
 __all__ = [
     'read_rwfdump',

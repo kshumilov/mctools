@@ -6,7 +6,7 @@ import attrs
 import numpy as np
 
 from mctools.cli.console import console
-from mctools.core.resource import Resource
+from mctools.newcore.resource import Resource
 
 from ....core import LineStepper
 from ....core.parser.base import FWP

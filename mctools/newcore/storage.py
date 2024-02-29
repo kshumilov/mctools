@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from typing import Any
+import pathlib
+from typing import Any, TYPE_CHECKING
 
 import attrs
-import h5py
 
-from mctools.core.resource import Resource
-from mctools.cli.console import console
+from .resource import Resource
+
+if TYPE_CHECKING:
+    from .consolidator import Consolidator
 
 __all__ = [
     'Storage',
@@ -17,8 +19,8 @@ __all__ = [
 class Storage:
     resources: dict[Resource, Any] = attrs.field(factory=dict)
 
-    consolidators: list[type] = attrs.field(factory=list)
-    complete: list[Any] = attrs.field(factory=list)
+    consolidators: list[type[Consolidator]] = attrs.field(factory=list)
+    complete: list[Consolidator] = attrs.field(factory=list)
 
     def __attrs_post_init__(self) -> None:
         self.build_consolidators()
@@ -52,6 +54,6 @@ class Storage:
             available |= resource
         return available
 
-    def to_hdf5(self, file: h5py.File, /, prefix: str = '') -> None:
+    def to_hdf5(self, filename: pathlib.Path, /, prefix: str = '') -> None:
         for consolidator in self.complete:
-            consolidator.to_hdf5(file, prefix=prefix)
+            consolidator.to_hdf5(filename, prefix=prefix)
