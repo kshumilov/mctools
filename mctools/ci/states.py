@@ -54,10 +54,18 @@ class States(Consolidator):
         return self.mobasis.n_mo - self.n_inactive_mo - self.graph.n_orb
 
     @property
+    def active_idx(self) -> slice:
+        return np.s_[self.n_inactive_mo:self.n_inactive_mo + self.n_active_mo]
+
+    @property
     def actorb(self) -> np.ndarray:
-        return self.mobasis.molorb[self.n_inactive_mo: self.n_inactive_mo + self.n_active_mo].copy()
+        return self.mobasis.molorb[self.active_idx].copy()
 
     def __attrs_post_init__(self) -> None:
+        if 'ci' not in self.mobasis.df:
+            self.label_mobasis()
+
+    def label_mobasis(self):
         self.mobasis.df['ci'] = pd.Categorical((['inactive'] * self.n_inactive_mo +
                                                 ['active'] * self.n_active_mo +
                                                 ['virtual'] * self.n_virtual_mo))

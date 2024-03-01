@@ -32,11 +32,11 @@ class LabelByPartition:
 
         df_labels = pd.DataFrame(labels.T, columns=[f'label_top{i}' for i in range(1, self.n_top + 1)])
         df_coeffs = pd.DataFrame(coeffs.T, columns=[f'coeff_top{i}' for i in range(1, self.n_top + 1)])
-        df_part = pd.concat(
+        df = pd.concat(
             [pd.concat([df_labels.iloc[:, i], df_coeffs.iloc[:, i]], axis=1) for i in range(self.n_top)], axis=1)
 
         if self.save:
-            mo.df = pd.concat([mo.df, df_part], axis=1)
+            mo.df = pd.concat([mo.df, df], axis=1)
 
         if self.return_result:
-            return df_part
+            return df

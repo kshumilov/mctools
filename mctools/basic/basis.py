@@ -275,7 +275,6 @@ class MolecularOrbitalBasis(Consolidator):
 
     class Col(StrEnum):
         occupied = auto()
-        active_space = auto()
 
         @classmethod
         def get_names(cls) -> list[str]:
