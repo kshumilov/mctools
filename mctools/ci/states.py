@@ -47,7 +47,7 @@ class States(Consolidator):
 
     @property
     def n_inactive_mo(self) -> int:
-        return self.mobasis.n_occ - self.n_active_mo
+        return self.mobasis.n_occ - self.graph.n_elec
 
     @property
     def n_virtual_mo(self) -> int:
