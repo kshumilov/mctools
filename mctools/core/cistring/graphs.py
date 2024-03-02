@@ -587,20 +587,26 @@ class DASGraph(Archived):
         return self.n_spaces == 3
 
     def get_graph_spec(self) -> str:
-        if self.is_cas:
-            spec = f'{self.n_orb}o'
-        else:
-            spec = []
-            for (l, u), e, o in zip(self.restrictions, self.reference, self.spaces):
-                if o > 0:
-                    h, p = e - l, u - e
-                    s = ''.join([f'{n:>-2d}{t}'
-                                 for n, t in zip((h, p, e), ('h', 'p', 'e'))
-                                 if n != 0 or n != o or n != e]).strip()
-                    s = f'{s}/{o:>-2d}'
-                    spec.append(s)
-            spec = ','.join(spec)
-        return f'{self.n_elec}e{self.n_orb}o|{spec}'
+        spec: list[str] = []
+        for n_orb, (occ_min, occ_max), occ_ref in zip(self.spaces, self.restrictions, self.reference):
+            if n_orb < 1:
+                continue
+            if occ_min == 0 and occ_max == n_orb:
+                spec.append(f'{occ_ref:d}e/{n_orb:d}o')
+            else:
+                max_holes: int = occ_ref - occ_min
+                max_particles: int = occ_max - occ_ref
+
+                space_spec: str = ''
+                if max_holes:
+                    space_spec += f'{max_holes:d}h'
+
+                if max_particles:
+                    space_spec += f'{max_particles:d}p'
+
+                space_spec += f'/{n_orb}o'
+                spec.append(space_spec)
+        return f'{self.n_elec}e{self.n_orb}o|%s' % (', '.join(spec))
 
     def __repr__(self) -> str:
         ras_spec = self.get_graph_spec()
@@ -608,5 +614,5 @@ class DASGraph(Archived):
 
 
 if __name__ == '__main__':
-    g = DASGraph.from_ras_spec((12, 50, 10), 12 + 36 + 13, max_hole=1, max_elec=1)
-    print(g)
+    self = DASGraph.from_ras_spec((12, 50, 10), 12 + 36 + 13, max_hole=1, max_elec=1)
+    print(self)

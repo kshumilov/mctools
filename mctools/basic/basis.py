@@ -8,6 +8,7 @@ import attrs
 import h5py
 import numpy as np
 import pandas as pd
+import rich.repr
 from numpy import typing as npt
 
 from mctools.core.utils.constants import PeriodicTable, ANGULAR_MOMENTUM_SYMBS, I2
@@ -36,7 +37,7 @@ def transform_integral(integral: npt.NDArray, transformation: npt.NDArray) -> np
 Resources: TypeAlias = dict[Resource, Any]
 
 
-@attrs.define(repr=False, eq=True)
+@attrs.define(repr=True, eq=True)
 class AtomicOrbitalBasis(Consolidator):
     RESOURCE: ClassVar[Resource] = Resource.ao_basis
     ROOT: ClassVar[pathlib.Path] = '/'.join(['ao', 'basis'])
@@ -144,8 +145,10 @@ class AtomicOrbitalBasis(Consolidator):
     def __len__(self) -> int:
         return len(self.df)
 
-    def __repr__(self) -> str:
-        return f'{self.__class__.__name__}(#AO={self.n_ao}, ints={self.integrals})'
+    def __rich_repr__(self) -> rich.repr.Result:
+        yield '#AO', self.n_ao
+        yield 'ansatz', self.ansatz.value
+        yield 'integrals', set(self.integrals)
 
     # @classmethod
     # def from_resources(cls, resources: Resources) -> AtomicOrbitalBasis:
@@ -348,6 +351,12 @@ class MolecularOrbitalBasis(Consolidator):
 
     def __len__(self) -> int:
         return len(self.df)
+
+    def __rich_repr__(self) -> rich.repr.Result:
+        yield "#MO", dict(Occ=self.n_occ, Vir=self.n_vir)
+        yield "#Occ", self.n_occ,
+        yield "ansatz", self.ansatz.value
+        yield self.ao_basis
 
     def get_partitioning(self, /, by: list[str] = None, idx: slice | None = None, save: bool = False) -> pd.DataFrame:
         idx = idx or np.s_[:self.n_occ]

@@ -66,9 +66,14 @@ class States(Consolidator):
             self.label_mobasis()
 
     def label_mobasis(self):
-        self.mobasis.df['ci'] = pd.Categorical((['inactive'] * self.n_inactive_mo +
+        self.mobasis.df['ci_space'] = pd.Categorical((['inactive'] * self.n_inactive_mo +
                                                 ['active'] * self.n_active_mo +
                                                 ['virtual'] * self.n_virtual_mo))
+        self.mobasis.df['active_space'] = self.mobasis.df['ci_space']
+        mo_offset = self.n_inactive_mo
+        for i, space in enumerate(self.graph.spaces, 1):
+            self.mobasis.df.iloc[mo_offset:mo_offset + space]['active_space'] = f'das{i}'
+            mo_offset += space
 
     @classmethod
     def df_from_resources(cls, resources: dict[Resource, Any]) -> pd.DataFrame:
@@ -106,5 +111,4 @@ class States(Consolidator):
                 ds = gr.get(arr_name)
                 args.append(np.asarray(ds))
             shape = tuple(gr.attrs['shape'])
-        del file, gr, ds
         return scipy.sparse.csr_matrix(tuple(args), shape=shape)

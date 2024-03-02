@@ -180,12 +180,14 @@ class Consolidator(Resourced, Archived, metaclass=abc.ABCMeta):
 
     def df_to_hdf5(self, filename: pathlib.Path, /, prefix: str = '') -> None:
         path, name = self.get_attr_hdf5_path('df', prefix=prefix)
-        self.df.to_hdf(filename, '/'.join([path, name]), format='table')
+        with pd.HDFStore(str(filename), mode='a') as hdf5store:
+            self.df.to_hdf(hdf5store, '/'.join([path, name]), format='table')
 
     @classmethod
     def df_from_hdf5(cls, filename: pathlib.Path, /, prefix: str = '') -> pd.DataFrame:
         path, name = cls.get_attr_hdf5_path('df', prefix=prefix)
-        df = pd.read_hdf(filename, '/'.join([path, name]))
+        with pd.HDFStore(str(filename), mode='r') as hdf5store:
+            df = pd.read_hdf(hdf5store, '/'.join([path, name]))
         return cast(pd.DataFrame, df)
 
     # def analyze(self, *analyzers: Sequence[Analyzer[Self]]) -> None:

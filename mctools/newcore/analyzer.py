@@ -1,12 +1,37 @@
 from __future__ import annotations
 
-from typing import Protocol, Any, TypeVar
+from abc import ABCMeta, abstractmethod
+from typing import TypeVar, Generic
+
+import attrs
+import pandas as pd
 
 from .consolidator import Consolidator
+
+__all__ = [
+    'Analyzer',
+]
+
 
 C = TypeVar('C', bound=Consolidator)
 
 
-class Analyzer(Protocol[C]):
-    def __cal__(self, consolidator: C) -> Any:
-        ...
+@attrs.define(eq=True, repr=True, frozen=True)
+class Analyzer(Generic[C], metaclass=ABCMeta):
+    save: bool = False
+    return_result: bool = True
+
+    def __call__(self, consolidator: C) -> pd.DataFrame | None:
+        df = self.analyze(consolidator)
+
+        if self.save:
+            consolidator.add_properties(df)
+
+        if self.return_result:
+            return df
+
+        return None
+
+    @abstractmethod
+    def analyze(self, consolidator: Consolidator) -> pd.DataFrame:
+        raise NotImplementedError()
