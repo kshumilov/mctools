@@ -35,13 +35,25 @@ class LabelByPartition(Analyzer):
         indicies = np.argpartition(partorb.transform(np.abs), -self.top, axis=0)
         labels = fragments['label'].values[indicies[top_n]][inverted]
         coeffs = np.take_along_axis(partorb.to_numpy(), indicies[top_n], 0)[inverted]
+        rest = np.take_along_axis(partorb.to_numpy(), indicies[:-self.top, :], 0).sum(axis=0)
+
+        ordering = coeffs.argsort(axis=0)[::-1, :]
+        labels = np.take_along_axis(labels, ordering, axis=0)
+        coeffs = np.take_along_axis(coeffs, ordering, axis=0)
 
         df_labels = pd.DataFrame(labels.T, columns=[f'label_top{i}' for i in range(1, self.top + 1)])
         df_coeffs = pd.DataFrame(coeffs.T, columns=[f'coeff_top{i}' for i in range(1, self.top + 1)])
 
-        return pd.concat(
-            [pd.concat([df_labels.iloc[:, i], df_coeffs.iloc[:, i]], axis=1)
-             for i in range(self.top)],
+        df = pd.concat(
+            [
+                pd.concat([df_labels.iloc[:, i], df_coeffs.iloc[:, i]], axis=1)
+                for i in range(self.top)
+            ],
             axis=1
         )
+
+        df['rest_coeff'] = rest
+
+        return df
+
 

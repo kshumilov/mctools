@@ -10,7 +10,6 @@ import h5py
 import numpy as np
 import pandas as pd
 
-from mctools.cli.console import console
 from mctools.newcore.resource import Resource
 from .metadata import MCTOOLS_METADATA_KEY
 

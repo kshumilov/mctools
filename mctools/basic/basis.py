@@ -26,6 +26,7 @@ __all__ = [
 
 @unique
 class AtomicOrbitalAnsatz(StrEnum):
+    spinor = auto()
     spherical = auto()
     cartesian = auto()
 
@@ -211,50 +212,6 @@ class AtomicOrbitalBasis(Consolidator):
             del file
         return integrals
 
-    # def to_hdf5(self, filename: pathlib.Path, /, prefix: str = '') -> None:
-    #     with h5py.File(filename, 'a') as file:
-    #         gr = file.require_group('/'.join([prefix, 'ao', 'basis']))
-    #         gr.attrs['ansatz'] = str(self.ansatz.name)
-    #
-    #         gr = file.require_group('/'.join([prefix, 'ao', 'basis', 'df']))
-    #         for col_name in self.df.columns:
-    #             col = self.df[col_name]
-    #             values = col.to_numpy(dtype=col.dtype if col.dtype != np.dtype(object) else np.dtype('S'))
-    #             gr.require_dataset(col_name, data=values, dtype=values.dtype, shape=values.shape, compression='gzip')
-    #
-    #         gr = file.require_group('/'.join(['ao', 'int1e']))
-    #         for name, array in self.integrals.items():
-    #             gr.require_dataset(name, data=array, shape=array.shape, dtype=array.dtype, compression='gzip')
-
-    # @classmethod
-    # def from_hdf5(cls, filename: pathlib.Path, /, prefix: str = '') -> AtomicOrbitalBasis:
-    #     with h5py.File(filename, 'r') as file:
-    #         gr = file.require_group('/'.join([prefix, 'ao', 'basis']))
-    #         ansatz = AtomicOrbitalAnsatz[gr.attrs['ansatz']]
-    #
-    #         if (gr := file.get('/'.join([prefix, 'ao', 'basis', 'df']), default=None)) is None:
-    #             raise KeyError()
-    #
-    #         # TODO: Validate Columns
-    #         df_dict = {}
-    #         for col_name, col in gr.items():
-    #             col = np.asarray(col)
-    #             if col.dtype.kind == 'S':
-    #                 col = col.astype('U')
-    #             df_dict[col_name] = col
-    #
-    #         df = pd.DataFrame.from_dict(df_dict)
-    #
-    #         # TODO: Validate Integrals
-    #         integrals = {}
-    #         if (gr := file.get('/'.join(['ao', 'int1e']), None)) is None:
-    #             raise KeyError()
-    #
-    #         for name, array in gr.items():
-    #             integrals[name] = np.asarray(array)
-    #
-    #     return cls(df=df, ansatz=ansatz, integrals=integrals)
-
     @classmethod
     def get_build_resources(cls) -> Resource:
         return (Resource.ao_basis_shell | Resource.ao_basis_atom | Resource.ao_basis_l | Resource.ao_basis_ml |
@@ -272,7 +229,6 @@ class MolecularOrbitalAnsatz(StrEnum):
 
 @attrs.define(repr=True, eq=True)
 class MolecularOrbitalBasis(Consolidator):
-    # RESOURCE_IDX_COL: ClassVar[str] = 'resource_idx'
     RESOURCE: ClassVar[Resource] = Resource.mo_basis
     ROOT: ClassVar[str] = '/'.join(['mo', 'basis'])
 
@@ -286,8 +242,6 @@ class MolecularOrbitalBasis(Consolidator):
         @classmethod
         def required(cls) -> list[str]:
             return [v.value for v in [cls.occupied.value]]
-
-    # df: pd.DataFrame = attr.field(validator=attr.validators.instance_of(pd.DataFrame), repr=False)
 
     molorb: npt.NDArray = attrs.field(
         validator=attrs.validators.instance_of(np.ndarray),
@@ -411,16 +365,6 @@ class MolecularOrbitalBasis(Consolidator):
     def get_metric(self) -> np.ndarray:
         return self.ao_basis.get_metric()
 
-    # @classmethod
-    # def from_resources(cls, storage: Resources) -> MolecularOrbitalBasis:
-    #     df = cls.df_from_resources(storage)
-    #
-    #     molorb = storage[Resource.mo_basis_molorb]
-    #     ansatz = storage[Resource.mo_basis_ansatz]
-    #     ao_basis = storage[Resource.ao_basis]
-    #
-    #     return cls(df, molorb, ansatz, ao_basis=ao_basis)
-
     @classmethod
     def df_from_resources(cls, storage: Resources) -> pd.DataFrame:
         n_elec = storage[Resource.mol_nelec]
@@ -438,54 +382,15 @@ class MolecularOrbitalBasis(Consolidator):
         df.index.name = 'mo_idx'
         return df
 
-    # def to_hdf5(self, file: h5py.File, /, prefix: str = '') -> None:
-    #     gr = file.require_group('/'.join([prefix, 'mo', 'basis']))
-    #     gr.attrs['ansatz'] = str(self.ansatz.name)
-    #
-    #     gr = file.require_group('/'.join([prefix, 'mo', 'basis', 'df']))
-    #     for col_name in self.df.columns:
-    #         col = self.df[col_name]
-    #         gr.require_dataset(col_name, data=col.values, dtype=col.dtype, shape=col.shape, compression='gzip')
-    #
-    #     file.require_dataset(
-    #         '/'.join(['mo', 'molorb']),
-    #         data=self.molorb,
-    #         shape=self.molorb.shape,
-    #         dtype=self.molorb.dtype,
-    #         compression='gzip',
-    #     )
-    #
-    #     self.ao_basis.to_hdf5(file, prefix=prefix)
-
-    # @classmethod
-    # def from_hdf5(cls, file: h5py.File, /, prefix: str = '') -> MolecularOrbitalBasis:
-    #     gr = file.get('/'.join([prefix, 'mo', 'basis']))
-    #     if gr is None:
-    #         raise KeyError('No molecular orbital basis')
-    #
-    #     ansatz = MolecularOrbitalAnsatz[gr.attrs['ansatz']]
-    #
-    #     gr = file.require_group('/'.join([prefix, 'mo', 'basis', 'df']))
-    #     if gr is None:
-    #         raise KeyError('No molecular orbital df')
-    #
-    #     df_dict = {}
-    #     for col_name, col in gr.items():
-    #         col = np.asarray(col)
-    #         if col.dtype.kind == 'S':
-    #             col = col.astype('U')
-    #         df_dict[col_name] = col
-    #     df = pd.DataFrame.from_dict(df_dict)
-    #
-    #     ds = file.get('/'.join([prefix, 'mo', 'molorb']))
-    #     if gr is None:
-    #         raise KeyError('No molecular orbital coefficients')
-    #
-    #     molorb = np.asarray(ds)
-    #     ao_basis = AtomicOrbitalBasis.from_hdf5(file, prefix=prefix)
-    #
-    #     return cls(df, molorb=molorb, ao_basis=ao_basis, ansatz=ansatz)
-
     @classmethod
     def get_build_resources(cls) -> Resource:
         return Resource.ao_basis | Resource.mol_nelec | Resource.mo_basis_molorb
+
+    @classmethod
+    def from_other_idx(cls, other: MolecularOrbitalBasis, idx: slice) -> MolecularOrbitalBasis:
+        return cls(
+            df=other.df.iloc[idx].copy(),
+            molorb=other.molorb[idx].copy(),
+            ansatz=other.ansatz,
+            ao_basis=other.ao_basis,
+        )
