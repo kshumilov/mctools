@@ -32,15 +32,8 @@ class Transitions(Consolidator):
         validator=attrs.validators.instance_of(States)
     )
 
-    def __attrs_post_init__(self) -> None:
-        self.calculate_transition_energy()
-
-    def calculate_transition_energy(self) -> None:
-        df_E = self.get_state_properties(['E'])
-        self.df['dE'] = df_E['E_fdx'] - df_E['E_idx']
-
     def get_state_properties(self, props: list[str]) -> pd.DataFrame:
-        dfs = self.states.df[['idx', props]]
+        dfs = self.states.df[['idx', *props]]
 
         df = self.df[['idx', 'fdx']].merge(
             dfs, how='left',
