@@ -4,7 +4,10 @@ from enum import StrEnum
 from typing import Sequence, Any
 
 from mctools.cli.console import console
-from mctools.core.resource import Resource
+from mctools.newcore.resource import Resource
+from mctools.newcore.storage import Storage
+from mctools.basic.basis import AtomicOrbitalBasis, MolecularOrbitalBasis
+from mctools.ci.states import States
 
 from . import LogParser, FchkParser
 
@@ -21,8 +24,9 @@ class GaussianSuffixes(StrEnum):
     ci = '.ci'
 
 
-def parse_gaussian_calc(filenames: Sequence[pathlib.Path], requested: Resource) -> dict[Resource, Any]:
-    storage: dict[Resource, Any] = {}
+def parse_gaussian_calc(filenames: Sequence[pathlib.Path], requested: Resource) -> Storage:
+    resources: dict[Resource, Any] = {}
+
     for filename in filenames:
         suffix = filename.suffix
         match suffix:
@@ -39,6 +43,8 @@ def parse_gaussian_calc(filenames: Sequence[pathlib.Path], requested: Resource) 
 
         with open(filename, 'r') as f:
             data, *_ = parser.parse(f)
-            storage.update(data)
+            resources.update(data)
 
-    return storage
+    return Storage(resources=resources, consolidators=[
+        AtomicOrbitalBasis, MolecularOrbitalBasis, States,
+    ])

@@ -5,7 +5,7 @@ from typing import ClassVar, Any, AnyStr, TypeAlias, TYPE_CHECKING
 
 import attrs
 
-from core.resource import Resource
+from mctools.newcore.resource import Resource
 
 from parsing.core.parser.base import Parser
 from parsing.core.parser.list import SequentialParser

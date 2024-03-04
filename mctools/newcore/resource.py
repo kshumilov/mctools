@@ -50,16 +50,19 @@ class Resource(Flag):
     ao_int1e_elec_hex = auto()
 
     # Multiconfigurational Wavefunction information
-    ci_energy = auto()
-    ci_nconfigs = auto()
-    ci_nstates = auto()
+    ci_states = auto()
+    ci_state_idx = auto()
+    ci_energies = auto()
     ci_vecs = auto()
-    ci_space = auto()
+    ci_graph = auto()
     ci_sa_weights = auto()
     ci_int1e_rdms = auto()
+    ci_spin = auto()
+
+    ci_initial_idx = auto()
+    ci_final_idx = auto()
     ci_int1e_tdms = auto()
     ci_osc = auto()
-    ci_spin = auto()
 
     @classmethod
     def NONE(cls) -> Resource:
@@ -75,7 +78,7 @@ class Resource(Flag):
 
     @classmethod
     def CI(cls) -> Resource:
-        return cls(cls.ci_energy | cls.ci_vecs | cls.ci_space |
+        return cls(cls.ci_energies | cls.ci_vecs | cls.ci_graph |
                    cls.ci_int1e_rdms | cls.ci_int1e_tdms | cls.ci_osc |
                    cls.ci_sa_weights | cls.ci_spin)
 

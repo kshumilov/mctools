@@ -1,20 +1,32 @@
 from __future__ import annotations
 
+from typing import Callable, Any
+
 import attrs
 
-from core.resource import Resource
+from mctools.newcore.resource import Resource
 
 
 __all__ = [
     'MCTOOLS_METADATA_KEY',
-    'DFFieldMetadata',
-    'ResourcedFieldMetadata',
-    'DatumFieldMetadata',
-    'ConsolidatorFieldMetadata',
+    # 'DFFieldMetadata',
+    # 'ResourcedFieldMetadata',
+    # 'DatumFieldMetadata',
+    # 'ConsolidatorFieldMetadata',
 ]
 
 
 MCTOOLS_METADATA_KEY = '__mctools_metadata'
+
+
+@attrs.define(repr=True, eq=True)
+class Meta:
+    archive_root: str = ''
+    archive_name: str = ''
+    archive_ignore: bool = False
+    to_archive: Callable[[Any], Any] = None
+    resource: Resource | None = None
+
 
 
 @attrs.frozen(repr=True, eq=True, hash=True)

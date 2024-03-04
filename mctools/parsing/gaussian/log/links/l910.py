@@ -3,25 +3,22 @@ from typing import AnyStr, TypeVar, ClassVar, TypeAlias
 
 import attrs
 import numpy as np
+import scipy
 
 from rich.progress import track
 
 from mctools.cli.console import console
-from mctools.core.mcspace import MCSpace
-from mctools.core.resource import Resource
-
+from mctools.core.cistring import DASGraph
+from mctools.newcore.resource import Resource
+from .base import MatrixParser, NewLinkParser
+from ....core.filehandler import FileWithPosition
 from ....core.parser.base import FWP
 from ....core.pattern import ProcessedPattern
 from ....core.stepper import LineStepper
-from ....core.filehandler import FileWithPosition
-
-from .base import MatrixParser, NewLinkParser
-
 
 __all__ = [
     'L910Parser',
 ]
-
 
 R = TypeVar('R')
 F: TypeAlias = FileWithPosition[AnyStr]
@@ -58,24 +55,28 @@ class L910Parser(NewLinkParser):
         validator=attrs.validators.instance_of(LineStepper),
     )
 
-    ci_space: MCSpace = attrs.field(init=False)
+    ci_graph: DASGraph = attrs.field(init=False)
     n_states: int = attrs.field(init=False)
     n_initial: int = attrs.field(init=False)
 
-    @ci_space.default
-    def _get_ci_space_default(self) -> MCSpace:
+    @ci_graph.default
+    def _get_ci_space_default(self) -> DASGraph:
         iops = self.iops
 
         n_mos = iops[7]
         ras1_mo = iops[112]
         ras3_mo = iops[114]
         ras2_mo = n_mos - ras1_mo - ras3_mo
-        mcspace = MCSpace.from_ras_spec(
+        # mcspace = MCSpace.from_ras_spec(
+        #     (ras1_mo, ras2_mo, ras3_mo), iops[6],
+        #     max_hole=iops[111], max_elec=iops[113],
+        # )
+        graph = DASGraph.from_ras_spec(
             (ras1_mo, ras2_mo, ras3_mo), iops[6],
-            max_hole=iops[111], max_elec=iops[113],
+            max_hole=iops[111], max_elec=iops[113]
         )
 
-        return mcspace
+        return graph
 
     @n_states.default
     def _get_n_states_default(self) -> int:
@@ -98,9 +99,9 @@ class L910Parser(NewLinkParser):
         with console.status("Looking for Link 910..."):
             self.stepper.step_to(start_in, on_eof='raise')
 
-        result: dict[Resource, np.ndarray] = {Resource.ci_space: self.ci_space}
+        result: dict[Resource, np.ndarray] = {Resource.ci_graph: self.ci_graph}
 
-        if (Resource.ci_energy | Resource.ci_vecs) & self.resources:
+        if (Resource.ci_energies | Resource.ci_vecs) & self.resources:
             result.update(self.read_energy_and_vector())
 
         if Resource.ci_spin & self.resources:
@@ -120,31 +121,40 @@ class L910Parser(NewLinkParser):
     def read_energy_and_vector(self, /) -> dict[Resource, np.ndarray]:
         state_in = self.stepper.get_anchor_predicate(self.STATE_ANCHOR)
 
-        states = np.zeros(self.n_states, dtype=[('idx', 'u4'), ('energy', 'f4')])
+        state_idx = np.zeros(self.n_states, dtype=np.min_scalar_type(self.n_states))
+        energies = np.zeros(self.n_states, dtype=np.float32)
 
-        n_configs = min(self.ci_space.n_configs, self.MAX_N_CONFIGS)
-        config_dtype = np.dtype([('addr', 'u4'), ('C', 'c8')])
-        vectors = np.zeros((self.n_states, n_configs), dtype=config_dtype)
+        n_configs = min(self.ci_graph.n_configs, self.MAX_N_CONFIGS)
+        vec_coef = np.zeros((self.n_states, n_configs), dtype=np.complex64)
+        vec_addr = np.zeros((self.n_states, n_configs), dtype=np.min_scalar_type(self.ci_graph.n_configs))
 
         for idx in track(range(self.n_states), description="Reading CI Energies & Vectors..."):
             self.stepper.step_to(state_in)
             line = self.stepper.fwp.last_line.split()
-            states[idx]['idx'] = line[1]
-            states[idx]['energy'] = line[4]
+            state_idx[idx] = line[1]
+            energies[idx] = line[4]
 
             n_configs_read = 0
             while n_configs_read < n_configs:
-                vector = vectors[idx]
                 line = self.stepper.readline()
                 for match in self.VEC_PATT.finditer(line):
-                    vector[n_configs_read]['addr'] = int(match.group(1)) - 1
-                    vector[n_configs_read]['C'] = complex(
+                    vec_addr[n_configs_read] = int(match.group(1)) - 1
+                    vec_coef[n_configs_read] = complex(
                         float(match.group(2)),
                         float(match.group(3))
                     )
                     n_configs_read += 1
 
-        return {Resource.ci_energy: states, Resource.ci_vecs: vectors}
+        vectors = scipy.sparse.csr_matrix(
+            (vec_coef.flat, (np.repeat(np.arange(self.n_states), n_configs), vec_addr.flat)),
+            shape=(self.n_states, self.ci_graph.n_configs)
+        )
+
+        return {
+            Resource.ci_state_idx: state_idx,
+            Resource.ci_energies: energies,
+            Resource.ci_vecs: vectors
+        }
 
     def read_spin_ev(self) -> dict[Resource, np.ndarray]:
         spin_start_in = self.stepper.get_anchor_predicate(self.SPIN_START_ANCHOR)
@@ -171,7 +181,7 @@ class L910Parser(NewLinkParser):
             [self.RDM_REAL_ANCHOR, self.RDM_IMAG_ANCHOR]
         ]
 
-        shape = (self.n_states, self.ci_space.n_mo_act, self.ci_space.n_mo_act)
+        shape = (self.n_states, self.ci_graph.n_orb, self.ci_graph.n_orb)
         rdms = np.zeros(shape, dtype=[('R', 'f4'), ('I', 'f4')])
 
         matrix_parser = MatrixParser(stepper=self.stepper)
@@ -198,7 +208,9 @@ class L910Parser(NewLinkParser):
             osc[jdx]['fdx'] = info[6]
             osc[jdx]['osc'] = info[8]
 
-        return {Resource.ci_osc: osc}
+        return {Resource.ci_initial_idx: osc['idx'],
+                Resource.ci_final_idx: osc['fdx'],
+                Resource.ci_osc: osc['osc']}
 
     def read_osc_and_tdms(self, /) -> dict[Resource, np.ndarray]:
         print('Parsing CI Oscillator Strengths & 1e-TDMs')
@@ -211,7 +223,7 @@ class L910Parser(NewLinkParser):
             dtype=[('idx', 'u4'), ('fdx', 'u4'), ('osc', 'f4')]
         )
 
-        tdms_shape = (self.n_transitions, self.ci_space.n_mo_act, self.ci_space.n_mo_act)
+        tdms_shape = (self.n_transitions, self.ci_graph.n_orb, self.ci_graph.n_orb)
         tdms = np.zeros(
             tdms_shape,
             dtype=[('R', 'f4'), ('I', 'f4')]
@@ -231,7 +243,11 @@ class L910Parser(NewLinkParser):
             osc[jdx]['osc'] = info[8]
 
         tdms = tdms.view('c8')
-        return {Resource.ci_osc: osc, Resource.ci_int1e_tdms: tdms}
+        return {
+            Resource.ci_initial_idx: osc['idx'],
+            Resource.ci_final_idx: osc['fdx'],
+            Resource.ci_osc: osc['osc'],
+            Resource.ci_int1e_tdms: tdms}
 
     @property
     def n_transitions(self) -> int:

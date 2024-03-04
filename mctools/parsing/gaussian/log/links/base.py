@@ -8,7 +8,7 @@ from typing import Any, TypeAlias, AnyStr, ClassVar
 import attrs
 import numpy as np
 
-from mctools.core.resource import Resource
+from mctools.newcore.resource import Resource
 
 from ....core.error import ParsingError
 from ....core.filehandler import FileWithPosition

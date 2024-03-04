@@ -5,7 +5,7 @@ from typing import TypeAlias, AnyStr, Any, TYPE_CHECKING, ClassVar
 import attrs
 
 from mctools.cli.console import console
-from mctools.core.resource import Resource
+from mctools.newcore.resource import Resource
 
 from .route import Link, RouteParser
 from ...core import Parser, SequentialParser
@@ -13,7 +13,6 @@ from ...core.filehandler import FileWithPosition
 
 if TYPE_CHECKING:
     from parsing.gaussian.log.links.base import NewLinkParser
-    from parsing.gaussian.log.route import Route
 
     FWP: TypeAlias = FileWithPosition[AnyStr]
     D: TypeAlias = dict[Resource, Any]
@@ -21,7 +20,7 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    'LogParser'
+    'LogParser',
 ]
 
 

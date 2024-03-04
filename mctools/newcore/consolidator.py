@@ -1,173 +1,196 @@
 from __future__ import annotations
 
 import abc
-from typing import Sequence, Self, TypeVar, Protocol, Any, ClassVar, TypeAlias
+import pathlib
+import types
+from typing import Any, ClassVar, TypeAlias, cast, get_args, Union, get_origin, TypeVar
 
 import attrs
-import pandas as pd
+import h5py
 import numpy as np
-import numpy.typing as npt
+import pandas as pd
 
-from mctools.core.resource import Resource
+from mctools.newcore.resource import Resource
+from .metadata import MCTOOLS_METADATA_KEY
 
-from .metadata import MCTOOLS_METADATA_KEY, ConsolidatorFieldMetadata, DatumFieldMetadata
-
+__all__ = [
+    'Archived',
+    'Resourced',
+    'Consolidator',
+]
 
 Storage: TypeAlias = dict[Resource, Any]
 
 
-class ResourceError(Exception):
-    pass
+def is_union(t: object) -> bool:
+    origin = get_origin(t)
+    return origin is Union or origin is types.UnionType
 
 
-class DependencyNotFound(ResourceError):
-    pass
+T = TypeVar('T', bound=type)
 
 
-class DimensionMismatch(ResourceError):
-    pass
+def get_union_subclasses(union: Union | types.UnionType, base: T | tuple[T, ...]) -> list[T]:
+    return list(filter(lambda t: issubclass(t, base), get_args(union)))
 
 
 @attrs.define(repr=True, eq=True)
-class Datum(metaclass=abc.ABCMeta):
-    @classmethod
-    def get_resources(cls) -> dict[Resource, DatumFieldMetadata]:
-        resources: dict[Resource, DatumFieldMetadata] = {}
-        for attribute in cls.__attrs_attrs__:
-            metadata = attribute.metadata.get(MCTOOLS_METADATA_KEY, DatumFieldMetadata())
-            if metadata.is_resourceful:
-                resources[metadata.res_spec.label] = metadata
-        return resources
+class Archived(metaclass=abc.ABCMeta):
+    TO_KEY: ClassVar[str] = 'to_hdf5'
+    ROOT_KEY: ClassVar[str] = 'hdf5_root'
+    NAME_KEY: ClassVar[str] = 'hdf5_name'
+    IGNORE_KEY: ClassVar[str] = 'ignore_hdf5'
+
+    ROOT: ClassVar[str] = ''
+
+    def to_hdf5(self, filename: pathlib.Path, /, prefix: str = '') -> None:
+        attrs.resolve_types(type(self))
+        for attr_name, attribute in attrs.fields_dict(type(self)).items():
+            metadata = attribute.metadata.get(MCTOOLS_METADATA_KEY, {})
+
+            if metadata.get(self.IGNORE_KEY, False) or not attribute.init:
+                continue
+
+            elif to_hdf5 := getattr(self, f'{attr_name}_{self.TO_KEY}', None):
+                to_hdf5(filename, prefix=prefix)
+
+            elif (value := getattr(self, attr_name)) is not None and hasattr(value, self.TO_KEY):
+                value.to_hdf5(filename, prefix)
+
+            else:
+                path, name = self.get_attr_hdf5_path(attr_name)
+                if to_hdf5 := metadata.get(self.TO_KEY):
+                    value = to_hdf5(value)
+
+                if isinstance(value, np.ndarray):
+                    with h5py.File(filename, 'a') as file:
+                        file.require_dataset('/'.join([path, name]), data=value, shape=value.shape, dtype=value.dtype)
+                    del file
+                else:
+                    with h5py.File(filename, 'a') as file:
+                        gr = file.require_group(path)
+                        gr.attrs[name] = value
+                    del file
 
     @classmethod
-    def get_tabular_build_resources(cls) -> dict[Resource, DatumFieldMetadata]:
-        df_cols: dict[Resource, DatumFieldMetadata] = {}
-        for attribute in cls.__attrs_attrs__:
-            metadata = attribute.metadata.get(MCTOOLS_METADATA_KEY, DatumFieldMetadata())
-            if metadata.required and metadata.is_tabular and metadata.is_resourceful:
-                df_cols[metadata.res_spec.label] = metadata
-        return df_cols
+    def from_hdf5(cls, filename: pathlib.Path, /, prefix: str = '') -> Archived:
+        args = []
+        kwargs = {}
+
+        attrs.resolve_types(cls)
+        for attr_name, attribute in attrs.fields_dict(cls).items():
+            metadata = attribute.metadata.get(MCTOOLS_METADATA_KEY, {})
+            if metadata.get(cls.IGNORE_KEY, False) or not attribute.init:
+                continue
+
+            elif from_hdf5 := getattr(cls, f'{attr_name}_from_hdf5', None):
+                value = from_hdf5(filename, prefix=prefix)
+
+            elif isinstance(attribute.type, type) and issubclass(attribute.type, Archived):
+                value = attribute.type.from_hdf5(filename, prefix=prefix)
+
+            elif is_union(attribute.type) and (bases := get_union_subclasses(attribute.type, Archived)):
+                # TODO: apply each base to until first successful one
+                value = bases[0].from_hdf5(filename, prefix=prefix)
+            else:
+                path, name = cls.get_attr_hdf5_path(attr_name, prefix=prefix)
+                with h5py.File(filename, 'r') as file:
+                    if isinstance(node := file.get('/'.join([path, name])), h5py.Dataset):
+                        value = np.asarray(node)
+                    elif isinstance(node := file.get(path), h5py.Group) and name in node.attrs:
+                        value = node.attrs.get(name)
+                    else:
+                        continue
+
+            if attribute.kw_only or attribute.default is not attrs.NOTHING:
+                kwargs[attr_name] = value
+            else:
+                args.append(value)
+
+        return cls(*args, **kwargs)
 
     @classmethod
-    def get_nontabular_indexed_build_resources(cls) -> dict[Resource, DatumFieldMetadata]:
-        resources: dict[Resource, DatumFieldMetadata] = {}
-        for attribute in cls.__attrs_attrs__:
-            metadata = attribute.metadata.get(MCTOOLS_METADATA_KEY, DatumFieldMetadata())
-            if metadata.required and not metadata.is_tabular and metadata.is_resourceful:
-                resources[metadata.res_spec.label] = metadata
-        return resources
+    def get_root_hdf5_path(cls, prefix: str = '') -> str:
+        return '/'.join([cls.ROOT, prefix])
 
     @classmethod
-    def get_index_label(cls) -> str:
-        return f'{cls.__name__.lower()}_idx'
+    def get_attr_hdf5_path(cls, attr_name: str, /, prefix: str = '') -> tuple[str, str]:
+        attribute = attrs.fields_dict(cls)[attr_name]
+        metadata = attribute.metadata.get(MCTOOLS_METADATA_KEY, {})
+        name = metadata.get(cls.NAME_KEY, attr_name)
+        path = metadata.get(cls.ROOT_KEY, cls.get_root_hdf5_path(prefix=prefix))
+        return path, name
+
+
+@attrs.define(repr=True, eq=True)
+class Resourced(metaclass=abc.ABCMeta):
+    RESOURCE: ClassVar[Resource] = Resource.NONE()
+
+    @classmethod
+    def from_resources(cls, resources: dict[Resource, Any]) -> Resourced:
+        if cls.RESOURCE in resources:
+            return resources[cls.RESOURCE]
+
+        args = []
+        kwargs = {}
+
+        attrs.resolve_types(cls)
+        for attr_name, attribute in attrs.fields_dict(cls).items():
+            metadata = attribute.metadata.get(MCTOOLS_METADATA_KEY, {})
+            if build_func := getattr(cls, f'{attr_name}_from_resources', None):
+                value = build_func(resources)
+            elif resource := metadata.get('resource'):
+                value = resources[resource]
+            else:
+                continue
+
+            if attribute.kw_only or attribute.default is not attrs.NOTHING:
+                kwargs[attr_name] = value
+            else:
+                args.append(value)
+        return cls(*args, **kwargs)
+
+    @classmethod
+    def get_build_resources(cls) -> Resource:
+        resources = Resource.NONE()
+        for attr_name, attribute in attrs.fields_dict(cls).items():
+            metadata = attribute.metadata.get(MCTOOLS_METADATA_KEY, {})
+            if resc_func := getattr(cls, f'get_{attr_name}_build_resources', None):
+                resources |= resc_func()
+            elif attribute.default is not attrs.NOTHING or attribute.init:
+                resources |= metadata.get('resource', Resource.NONE())
+
+        return Resource.NONE()
 
 
 @attrs.mutable(repr=True, eq=True)
-class Consolidator(metaclass=abc.ABCMeta):
-    RESOURCE_IDX_COL: ClassVar[str] = 'resource_idx_col'
+class Consolidator(Resourced, Archived, metaclass=abc.ABCMeta):
+    RESOURCE_IDX_COL: ClassVar[str] = 'resource_idx'
 
-    DatumClass: ClassVar[type[Datum]] = Datum
-    ResourceLabel: ClassVar[Resource] = Resource.NONE()
-
-    df: pd.DataFrame
-
-    @classmethod
-    def from_resources(cls, storage: Storage) -> Consolidator:
-        df = cls._build_df(storage)
-        nonindexed = cls._gather_non_indexed_resources(storage)
-        indexed = cls._gather_indexed_non_df_resources(storage, len(df))
-
-        instance = storage[cls.ResourceLabel] = cls(df, *nonindexed, **indexed)
-        return instance
+    df: pd.DataFrame = attrs.field(
+        validator=attrs.validators.instance_of(pd.DataFrame),
+        repr=False
+    )
 
     @classmethod
-    def _build_df(cls, storage: Storage) -> pd.DataFrame:
-        df_dict: dict[str, npt.ArrayLike] = {}
-
-        n_datapoints: int | None = None
-        df_cols = cls.DatumClass.get_tabular_build_resources()
-        for resource_label, metadata in df_cols.items():
-            if (resource := storage.get(resource_label, None)) is None:
-                raise DependencyNotFound(f"Required resource {metadata.res_spec.label} is missing")
-
-            if resource.ndim > 2:
-                raise DimensionMismatch(f"Resource is of wrong dimension, "
-                                        f"cannot be more than 2: ndim = {resource.ndim}")
-
-            if resource.ndim == 1:
-                n_rows = resource.shape[0]
-                n_cols = 1
-            else:
-                n_rows = resource.shape[metadata.df_spec.idx_axis]
-                n_cols = resource.shape[metadata.df_spec.value_axis]
-
-            if n_cols != metadata.df_spec.n_cols:
-                raise DimensionMismatch(f"Resource's value axis does not match "
-                                        f"number of columns: "
-                                        f"{n_cols} != {metadata.df_spec.n_cols}")
-
-            if n_datapoints is not None and n_rows != n_datapoints:
-                raise DimensionMismatch(f"Resource's index direction does not match "
-                                        f"previously identified number of datapoints: "
-                                        f"{n_datapoints} != {n_rows}")
-            else:
-                n_datapoints = n_rows
-
-            # Orient resource such that it is in "long-table" format
-            if resource.ndim == 1:
-                df_dict[metadata.df_spec.cols[0]] = resource
-            else:
-                resource = resource.T if metadata.df_spec.idx_axis == 0 else resource
-                for col_name, col in zip(metadata.df_spec.cols, resource):
-                    df_dict[col_name] = col
-
-            df = pd.DataFrame.from_dict(df_dict)
-            df[cls.RESOURCE_IDX_COL] = np.arange(len(df))
-            df.index.name = cls.DatumClass().get_index_label()
-            return df
-
-    @classmethod
-    def _gather_indexed_non_df_resources(cls, storage: Storage, n_datapoints: int) -> dict[str, Any]:
-        required_resources: dict[str, Any] = {}
-        for resource_label, metadata in cls.DatumClass.get_nontabular_indexed_build_resources().items():
-            if (resource := storage.get(resource_label, None)) is None:
-                raise DependencyNotFound(f"Required resource "
-                                         f"{metadata.res_spec.label} is missing")
-
-            n_rows = resource.shape[metadata.res_spec.idx_axis]
-            if n_datapoints != n_rows:
-                raise DimensionMismatch(f"Resource's index direction does not match "
-                                        f"previously identified number of datapoints: "
-                                        f"{n_datapoints} != {n_rows}")
-
-            required_resources[metadata.res_spec.label.name] = resource
-
-        return required_resources
-
-    @classmethod
-    def _gather_non_indexed_resources(cls, storage: Storage) -> tuple[Resource, ...]:
-        resources: list[Resource] = []
-        for attribute in cls.__attrs_attrs__:
-            metadata = attribute.metadata.get(MCTOOLS_METADATA_KEY, ConsolidatorFieldMetadata())
-            if metadata.is_resourceful and not metadata.res_spec.is_indexed:
-                resources[metadata.res_spec.label.name] = storage[metadata.res_spec.label]
-
-        return tuple(resources)
-
     @abc.abstractmethod
-    def analyze(self, *analyzers: Sequence[Analyzer[Self]]) -> None:
-        raise NotImplementedError
+    def df_from_resources(cls, resources: dict[Resource, Any]) -> pd.DataFrame:
+        raise NotImplementedError()
 
-    def set(self, resource: Resource, /, idx: slice | Sequence[int] | None = None) -> None:
-        raise NotImplementedError
+    def df_to_hdf5(self, filename: pathlib.Path, /, prefix: str = '') -> None:
+        path, name = self.get_attr_hdf5_path('df', prefix=prefix)
+        with pd.HDFStore(str(filename), mode='a') as hdf5store:
+            self.df.to_hdf(hdf5store, '/'.join([path, name]), format='table')
+
+    @classmethod
+    def df_from_hdf5(cls, filename: pathlib.Path, /, prefix: str = '') -> pd.DataFrame:
+        path, name = cls.get_attr_hdf5_path('df', prefix=prefix)
+        with pd.HDFStore(str(filename), mode='r') as hdf5store:
+            df = pd.read_hdf(hdf5store, '/'.join([path, name]))
+        return cast(pd.DataFrame, df)
+
+    # def analyze(self, *analyzers: Sequence[Analyzer[Self]]) -> None:
+    #     raise NotImplementedError
 
     def __len__(self) -> int:
         return len(self.df)
-
-
-C = TypeVar('C', bound=Consolidator)
-
-
-class Analyzer(Protocol[C]):
-    def __cal__(self, consolidator: C) -> Any:
-        ...
