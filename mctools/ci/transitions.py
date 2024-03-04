@@ -12,7 +12,7 @@ from mctools.newcore.metadata import MCTOOLS_METADATA_KEY
 from .states import States
 
 __all__ = [
-    'Transitions'
+    'Transitions',
 ]
 
 
@@ -31,6 +31,34 @@ class Transitions(Consolidator):
     states: States = attrs.field(
         validator=attrs.validators.instance_of(States)
     )
+
+    def __attrs_post_init__(self) -> None:
+        self.calculate_transition_energy()
+
+    def calculate_transition_energy(self) -> None:
+        df_E = self.get_state_properties(['E'])
+        self.df['dE'] = df_E['E_fdx'] - df_E['E_idx']
+
+    def get_state_properties(self, props: list[str]) -> pd.DataFrame:
+        dfs = self.states.df[['idx', props]]
+
+        df = self.df[['idx', 'fdx']].merge(
+            dfs, how='left',
+            right_on=['idx'],
+            left_on=['idx'],
+            copy=True
+        ).drop(columns=['idx']).rename(
+            columns={col: f'{col}_idx' for col in props}
+        ).merge(
+            dfs, how='left',
+            right_on=['idx'],
+            left_on=['fdx'],
+            copy=True
+        ).drop(columns=['idx']).rename(
+            columns={col: f'{col}_fdx' for col in props}
+        )
+
+        return df
 
     @classmethod
     def df_from_resources(cls, resources: dict[Resource, Any]) -> pd.DataFrame:

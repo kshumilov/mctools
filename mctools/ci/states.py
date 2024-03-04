@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import ClassVar, Any
+from typing import ClassVar, Any, cast
 
 import attrs
 import h5py
@@ -65,7 +65,7 @@ class States(Consolidator):
         if 'ci' not in self.mobasis.df:
             self.label_mobasis()
 
-    def label_mobasis(self):
+    def label_mobasis(self) -> None:
         self.mobasis.df['ci'] = pd.Categorical((
                 ['inactive'] * self.n_inactive_mo +
                 ['active'] * self.n_active_mo +
@@ -82,7 +82,7 @@ class States(Consolidator):
     @classmethod
     def df_from_resources(cls, resources: dict[Resource, Any]) -> pd.DataFrame:
         df_dict: dict[str, np.ndarray] = {
-            'idx': resources.get(Resource.ci_state_idx),
+            'idx': cast(np.ndarray, resources.get(Resource.ci_state_idx)),
             'E': resources.get(Resource.ci_energies),
         }
 

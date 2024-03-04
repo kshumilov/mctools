@@ -59,6 +59,7 @@ class Resource(Flag):
     ci_int1e_rdms = auto()
     ci_spin = auto()
 
+    ci_transitions = auto()
     ci_initial_idx = auto()
     ci_final_idx = auto()
     ci_int1e_tdms = auto()

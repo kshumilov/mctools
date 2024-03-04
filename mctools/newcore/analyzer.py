@@ -13,7 +13,7 @@ __all__ = [
 ]
 
 
-C = TypeVar('C', bound=Consolidator)
+C = TypeVar('C', bound=Consolidator, contravariant=True)
 
 
 @attrs.define(eq=True, repr=True, frozen=True)
@@ -25,8 +25,7 @@ class Analyzer(Generic[C], metaclass=ABCMeta):
         df = self.analyze(consolidator)
 
         if self.save:
-            consolidator.add_properties(df)
-
+            consolidator.df = pd.concat([consolidator.df, df], axis=1)
         if self.return_result:
             return df
 
