@@ -25,24 +25,22 @@ class LabelByPartition(Analyzer):
     def n_by(self) -> int:
         return len(self.by)
 
-    def analyze(self, mo: MolecularOrbitalBasis) -> pd.DataFrame:
-        df = mo.get_partitioning(by=self.by)
-        fragments, partorb = df.iloc[:, :self.n_by], df.iloc[:, self.n_by:]
-        fragments['label'] = fragments.apply(lambda r: '_'.join(r), axis=1)
+    def analyze(self, c: MolecularOrbitalBasis) -> pd.DataFrame:
+        partorb = c.get_partition(self.by)
+        labels = partorb.index.map('-'.join).to_numpy(dtype='U')
 
-        top_n = np.s_[-self.top:, :]
-        inverted = np.s_[::-1, :]
-        indicies = np.argpartition(partorb.transform(np.abs), -self.top, axis=0)
-        labels = fragments['label'].values[indicies[top_n]][inverted]
-        coeffs = np.take_along_axis(partorb.to_numpy(), indicies[top_n], 0)[inverted]
-        rest = np.take_along_axis(partorb.to_numpy(), indicies[:-self.top, :], 0).sum(axis=0)
+        indices = np.argpartition(partorb.transform(np.abs), -self.top, axis=0)
 
-        ordering = coeffs.argsort(axis=0)[::-1, :]
-        labels = np.take_along_axis(labels, ordering, axis=0)
-        coeffs = np.take_along_axis(coeffs, ordering, axis=0)
+        mo_labels = labels[indices[-self.top:, :]][::-1, :]
+        mo_coeffs = np.take_along_axis(partorb.to_numpy(), indices[-self.top:, :], 0)[::-1, :]
+        rest = np.take_along_axis(partorb.to_numpy(), indices[:-self.top, :], 0).sum(axis=0)
 
-        df_labels = pd.DataFrame(labels.T, columns=[f'label_top{i}' for i in range(1, self.top + 1)])
-        df_coeffs = pd.DataFrame(coeffs.T, columns=[f'coeff_top{i}' for i in range(1, self.top + 1)])
+        ordering = mo_coeffs.argsort(axis=0)[::-1, :]
+        mo_labels = np.take_along_axis(mo_labels, ordering, axis=0)
+        mo_coeffs = np.take_along_axis(mo_coeffs, ordering, axis=0)
+
+        df_labels = pd.DataFrame(mo_labels.T, columns=[f'label_top{i}' for i in range(1, self.top + 1)])
+        df_coeffs = pd.DataFrame(mo_coeffs.T, columns=[f'coeff_top{i}' for i in range(1, self.top + 1)])
 
         df = pd.concat(
             [
@@ -52,7 +50,7 @@ class LabelByPartition(Analyzer):
             axis=1
         )
 
-        df['rest_coeff'] = rest
+        df['coeff_rest'] = rest
 
         return df
 

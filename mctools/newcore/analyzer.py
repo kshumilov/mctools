@@ -18,19 +18,14 @@ C = TypeVar('C', bound=Consolidator, contravariant=True)
 
 @attrs.define(eq=True, repr=True, frozen=True)
 class Analyzer(Generic[C], metaclass=ABCMeta):
-    save: bool = False
-    return_result: bool = True
+    def __call__(self, c: C, /, save: bool = False) -> pd.DataFrame | None:
+        df = self.analyze(c)
 
-    def __call__(self, consolidator: C) -> pd.DataFrame | None:
-        df = self.analyze(consolidator)
+        if save:
+            c.df = pd.concat([c.df, df], axis=1)
 
-        if self.save:
-            consolidator.df = pd.concat([consolidator.df, df], axis=1)
-        if self.return_result:
-            return df
-
-        return None
+        return df
 
     @abstractmethod
-    def analyze(self, consolidator: Consolidator) -> pd.DataFrame:
+    def analyze(self, consolidator: C) -> pd.DataFrame:
         raise NotImplementedError()

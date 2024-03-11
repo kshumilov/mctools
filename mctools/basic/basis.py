@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pathlib
 from enum import unique, StrEnum, auto
-from typing import TypeAlias, Any, ClassVar
+from typing import TypeAlias, Any, ClassVar, Hashable
+from collections import defaultdict
 
 import attrs
 import h5py
@@ -11,7 +12,7 @@ import pandas as pd
 import rich.repr
 from numpy import typing as npt
 
-from mctools.core.utils.constants import PeriodicTable, ANGULAR_MOMENTUM_SYMBS, I2
+from mctools.core.utils.constants import PeriodicTable, ANGULAR_MOMENTUM_SYMBS
 from mctools.newcore.consolidator import Consolidator
 from mctools.newcore.metadata import MCTOOLS_METADATA_KEY
 from mctools.newcore.resource import Resource
@@ -129,11 +130,9 @@ class AtomicOrbitalBasis(Consolidator):
             assert integral.ndim == 2
             assert self.n_ao == integral.shape[0]
 
-    def __attrs_post_init__(self):
+    def __attrs_post_init__(self) -> None:
         match self.ansatz:
-            case AtomicOrbitalAnsatz.spherical:
-                pass
-            case _:
+            case AtomicOrbitalAnsatz.cartesian:
                 raise NotImplementedError()
 
     @property
@@ -151,11 +150,24 @@ class AtomicOrbitalBasis(Consolidator):
         yield 'ansatz', self.ansatz.value
         yield 'integrals', set(self.integrals)
 
-    # @classmethod
-    # def from_resources(cls, resources: Resources) -> AtomicOrbitalBasis:
-    #     df = cls.df_from_resources(resources)
-    #     integrals = cls.integrals_from_resources(resources)
-    #     return cls(df, integrals=integrals)
+    def get_fragments(self, cols: list[str], /) -> pd.DataFrame:
+        fragments: defaultdict[Hashable, np.ndarray] = defaultdict(
+            lambda: np.full(self.n_ao, False, dtype=np.bool_)
+        )
+
+        for label, ao_idx in self.df.groupby(cols).indices.items():
+            fragments[label][ao_idx] = True
+
+        if len(cols) > 1:
+            index = pd.MultiIndex.from_tuples(fragments.keys(), names=cols)
+        else:
+            index = pd.Index(fragments.keys(), name=cols[0])
+
+        return pd.DataFrame(
+            fragments.values(),
+            index=index,
+            columns=[f'AO{i + 1}' for i in range(self.n_ao)]
+        )
 
     @classmethod
     def df_from_resources(cls, resources: Resources) -> pd.DataFrame:
@@ -177,6 +189,9 @@ class AtomicOrbitalBasis(Consolidator):
         atomic_numbers = resources[Resource.mol_atnums]
         df[cls.Col.element.value] = PeriodicTable.loc[atomic_numbers[df[cls.Col.atom_idx.value]], 'Symbol'].values
         df[cls.Col.L.value] = ANGULAR_MOMENTUM_SYMBS[df[cls.Col.l.value]]
+
+        n_prim = resources.get(Resource.ao_basis_shells_size, None)
+        df['n_prim'] = n_prim[df.shell_idx]
 
         shell_coords = resources[Resource.ao_basis_shells_coords]
         df[cls.Col.get_xyz()] = shell_coords[df[cls.Col.shell_idx.value]]
@@ -215,7 +230,8 @@ class AtomicOrbitalBasis(Consolidator):
     @classmethod
     def get_build_resources(cls) -> Resource:
         return (Resource.ao_basis_shell | Resource.ao_basis_atom | Resource.ao_basis_l | Resource.ao_basis_ml |
-                Resource.ao_basis_shells_coords |
+                Resource.ao_basis_shells_coords | Resource.ao_basis_shells_size | Resource.ao_basis_prims_coef |
+                Resource.ao_basis_prims_exp |
                 Resource.mol_atnums | Resource.mol_atnums)
 
 
@@ -312,58 +328,46 @@ class MolecularOrbitalBasis(Consolidator):
         yield "ansatz", self.ansatz.value
         yield self.ao_basis
 
-    def get_partitioning(self, /, by: list[str] = None, idx: slice | None = None, save: bool = False) -> pd.DataFrame:
-        idx = idx or np.s_[:self.n_occ]
-        by = by or [self.ao_basis.Col.atom.value, self.ao_basis.Col.L.value]
+    def get_partition(self, by: list[str], /) -> pd.DataFrame:
+        fragments = self.ao_basis.get_fragments(by)
 
-        S = self.get_metric()
-        match self.ansatz:
-            case MolecularOrbitalAnsatz.RR | MolecularOrbitalAnsatz.GU | MolecularOrbitalAnsatz.CR:
-                C = self.molorb[idx]
-            case MolecularOrbitalAnsatz.RU:
-                raise NotImplementedError()
+        S = self.ao_basis.get_metric()
 
-        F = []
-        fragments = self.ao_basis.df[by].drop_duplicates().reset_index(drop=True)
-        for i, fragment in fragments.iterrows():
-            p = np.full(self.ao_basis.n_ao, True, dtype=np.bool_)
-            for col, value in fragment.items():
-                p &= self.ao_basis.df[col] == value
-            F.append(np.outer(p, p) * S)
-        F = np.stack(F)
+        overlap = np.einsum(
+            'Ft,pat,tu,ab,pbu -> Fp',
+            fragments.to_numpy(),
+            self.molorb, S, np.eye(2), self.molorb.conj(),
+            optimize=True
+        )
 
-        I = np.einsum('pat,Ftv,ab,pbv->Fp', C, F, I2, C.conj(), optimize='optimal')
+        return pd.DataFrame(
+            overlap,
+            columns=[f'MO{i + 1}' for i in range(self.n_mo)],
+            index=fragments.index,
+        )
 
-        if save:
-            labels = fragments[by].apply(lambda r: '_'.join(r[by]), axis=1)
-            df = pd.DataFrame(I.T, columns=labels)
-            self.df = pd.concat([self.df, df], axis=1)
+    def get_population(self, of: list[str], /) -> pd.DataFrame:
+        fragments = self.ao_basis.get_fragments(of)
 
-        I = pd.DataFrame(I, columns=[f'MO{p}' for p in range(1, I.shape[-1] + 1)])
-        return pd.concat([fragments, I], axis=1)
+        S = self.ao_basis.get_metric()
+        P = self.get_density()
 
-    def get_density(self, idx: slice | None = None) -> np.ndarray:
-        idx = idx or np.s_[:self.n_occ]
-        match self.ansatz:
-            case MolecularOrbitalAnsatz.RR | MolecularOrbitalAnsatz.GU | MolecularOrbitalAnsatz.CR:
-                C = self.molorb[idx]
-            case MolecularOrbitalAnsatz.RU:
-                raise NotImplementedError()
+        Q: np.ndarray = np.einsum(
+            'abtu,ba,ut -> t',
+            P, np.eye(2), S,
+            optimize=True
+        )
 
-        return np.einsum('pat,qbv,ab->tv', C, C.conj(), I2, optimize='optimal')
+        return (fragments * Q).sum(axis=1)
 
-    def get_overlap(self, idx: slice | None = None) -> np.ndarray:
-        match self.ansatz:
-            case MolecularOrbitalAnsatz.RR | MolecularOrbitalAnsatz.GU | MolecularOrbitalAnsatz.CR:
-                C = self.molorb[idx]
-            case MolecularOrbitalAnsatz.RU:
-                raise NotImplementedError()
+    def get_density(self) -> np.ndarray:
+        C = self.molorb[:self.n_occ]
 
-        S = self.get_metric()
-        return np.einsum('pat,tv,qbv,ab->pq', C, S, C.conj(), I2, optimize='optimal')
-
-    def get_metric(self) -> np.ndarray:
-        return self.ao_basis.get_metric()
+        return np.einsum(
+            'pat,pbu->abtu',
+            C, C.conj(),
+            optimize=True,
+        )
 
     @classmethod
     def df_from_resources(cls, storage: Resources) -> pd.DataFrame:
