@@ -48,7 +48,7 @@ class Archived(metaclass=abc.ABCMeta):
         for attr_name, attribute in attrs.fields_dict(type(self)).items():
             metadata = attribute.metadata.get(MCTOOLS_METADATA_KEY, {})
 
-            if metadata.get(self.IGNORE_KEY, False) or not attribute.init:
+            if metadata.get(self.IGNORE_KEY, False) or not attribute.init or attribute.default is None:
                 continue
 
             elif to_hdf5 := getattr(self, f'{attr_name}_{self.TO_KEY}', None):
@@ -139,8 +139,17 @@ class Resourced(metaclass=abc.ABCMeta):
             metadata = attribute.metadata.get(MCTOOLS_METADATA_KEY, {})
             if build_func := getattr(cls, f'{attr_name}_from_resources', None):
                 value = build_func(resources)
+
+            elif isinstance(attribute.type, type) and issubclass(attribute.type, Consolidator):
+                value = resources[attribute.type.RESOURCE]
+
+            elif is_union(attribute.type) and (bases := get_union_subclasses(attribute.type, Consolidator)):
+                # TODO: apply each base to until first successful one
+                value = resources.get(bases[0].RESOURCE)
+
             elif resource := metadata.get('resource'):
-                value = resources[resource]
+                value = resources.get(resource)
+
             else:
                 continue
 
@@ -180,13 +189,17 @@ class Consolidator(Resourced, Archived, metaclass=abc.ABCMeta):
     def df_to_hdf5(self, filename: pathlib.Path, /, prefix: str = '') -> None:
         path, name = self.get_attr_hdf5_path('df', prefix=prefix)
         with pd.HDFStore(str(filename), mode='a') as hdf5store:
-            self.df.to_hdf(hdf5store, '/'.join([path, name]), format='table')
+            self.df.to_hdf(
+                path_or_buf=hdf5store,
+                key='/'.join([path, name]),
+                format='table'
+            )
 
     @classmethod
     def df_from_hdf5(cls, filename: pathlib.Path, /, prefix: str = '') -> pd.DataFrame:
         path, name = cls.get_attr_hdf5_path('df', prefix=prefix)
         with pd.HDFStore(str(filename), mode='r') as hdf5store:
-            df = pd.read_hdf(hdf5store, '/'.join([path, name]))
+            df = pd.read_hdf(path_or_buf=hdf5store, key='/'.join([path, name]))
         return cast(pd.DataFrame, df)
 
     # def analyze(self, *analyzers: Sequence[Analyzer[Self]]) -> None:

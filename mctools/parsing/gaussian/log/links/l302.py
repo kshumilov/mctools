@@ -76,7 +76,7 @@ class L302Parser(NewLinkParser):
 
             with console.status(f'Reading {resource.name}...'):
                 self.stepper.step_to(anchor_in, on_eof='raise')
-                matrix = result.setdefault(resource, np.zeros((n_aos, n_aos), dtype=np.float32))
+                matrix = result.setdefault(resource, np.zeros((n_aos, n_aos), dtype=np.float_))
                 matrix_parser.read_tril_exact(matrix)
                 matrix += (matrix.T - np.diag(np.diag(matrix)))
         return result

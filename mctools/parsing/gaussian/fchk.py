@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import AnyStr, ClassVar
+from typing import AnyStr, ClassVar, Any
 
 import attrs
 import numpy as np
@@ -32,7 +32,7 @@ GAUSSIAN_SHELL_TYPES: dict[int, str] = {
 
 GAUSSIAN_ML_AO: dict[str, list[int]] = {
     'S': [0],
-    'P': [1, -1, 0],
+    'P': [-1, 1, 0],
     'D': [0, 1, -1, 2, -2],
     'F': [0, 1, -1, 2, -2, 3, -3],
     'G': [0, 1, -1, 2, -2, 3, -3, 4, -4],
@@ -77,7 +77,7 @@ class FchkParser(Parser):
     )
 
     FCHK_HEADER_PATT: ClassVar[ProcessedPattern] = ProcessedPattern(
-        r'(?P<header>([A-Z][a-zA-Z]+)(\s[a-zA-Z]+)+)\s+'
+        r'(?P<name>([A-Z][a-zA-Z]+)(\s[a-zA-Z]+)+)\s+'
         r'(?P<dtype>[IRCHL])\s+'
         r'((N=\s+(?P<size>\d+))|(?P<value>[+-]?\d+(\.\d+[dDeE]\+\d+)?))',
         constructor='header',
@@ -119,23 +119,13 @@ class FchkParser(Parser):
         result = {}
 
         info = self.read_description()
-        match info['mo_ansatz']:
-            case 'R' | 'RO':
-                mo_ansatz = MolecularOrbitalAnsatz['RR']
-            case 'U':
-                mo_ansatz = MolecularOrbitalAnsatz['RU']
-            case 'G':
-                mo_ansatz = MolecularOrbitalAnsatz['GU']
-            case _:
-                mo_ansatz = MolecularOrbitalAnsatz['GU']
-
-        result.update({Resource.mo_basis_ansatz: mo_ansatz})
+        result.update(info)
 
         charge = self.read_scalar('Charge')
-        result.update({Resource.mol_multiplicity: np.asarray(charge)})
+        result.update({Resource.mol_charge: np.asarray(charge)})
 
         multiplicity = self.read_scalar('Multiplicity')
-        result.update({Resource.mol_charge: np.asarray(multiplicity)})
+        result.update({Resource.mol_multiplicity: np.asarray(multiplicity)})
 
         n_elec = self.read_scalar('Number of electrons')
         result.update({Resource.mol_nelec: np.asarray(n_elec)})
@@ -145,18 +135,29 @@ class FchkParser(Parser):
         result.update(self.read_molecular_geometry())
         result.update(self.read_basis())
 
+        mo_ansatz = result[Resource.mo_basis_ansatz]
         result.update(self.read_molecular_orbitals(n_ao, mo_ansatz))
 
         console.print('Finished parsing FCHK file')
         return result, self.stepper.return_file()
 
-    def read_description(self) -> dict[str, str]:
+    def read_description(self) -> dict[Resource, Any]:
         console.print('Parsing FCHK description...')
 
         short_title = self.stepper.readline()
 
         if match := self.MethodPatt.search(self.stepper.readline()):
-            return {'short_title': short_title.strip(), **match}
+            match match.pop('mo_ansatz'):
+                case 'R' | 'RO':
+                    mo_ansatz = MolecularOrbitalAnsatz['RR']
+                case 'U':
+                    mo_ansatz = MolecularOrbitalAnsatz['RU']
+                case 'G':
+                    mo_ansatz = MolecularOrbitalAnsatz['GU']
+                case _:
+                    mo_ansatz = MolecularOrbitalAnsatz['GU']
+
+            return {Resource.mo_basis_ansatz: mo_ansatz}
 
         raise AnchorNotFound('Could not find FCHK method line')
 

@@ -129,7 +129,7 @@ class L910Parser(NewLinkParser):
         vec_addr = np.zeros((self.n_states, n_configs), dtype=np.min_scalar_type(self.ci_graph.n_configs))
 
         for idx in track(range(self.n_states), description="Reading CI Energies & Vectors..."):
-            self.stepper.step_to(state_in)
+            self.stepper.step_to(state_in, on_eof='raise')
             line = self.stepper.fwp.last_line.split()
             state_idx[idx] = line[1]
             energies[idx] = line[4]
@@ -167,7 +167,7 @@ class L910Parser(NewLinkParser):
 
         spin_in = self.stepper.get_anchor_predicate(self.SPIN_ANCHOR)
         for idx in track(range(self.n_states), description='Reading Spin expectation values...'):
-            self.stepper.step_to(spin_in)
+            self.stepper.step_to(spin_in, on_eof='raise')
             line = self.stepper.fwp.last_line.split()
             spin[idx] = line[3:-3:2]
 
@@ -188,7 +188,7 @@ class L910Parser(NewLinkParser):
         for state_idx in track(range(self.n_states), description='Reading CI State RDMs...'):
             self.stepper.step_to(rdm_in)
             for component, rdm_part_in in zip(['R', 'I'], rdm_parts_in):
-                self.stepper.step_to(rdm_part_in)
+                self.stepper.step_to(rdm_part_in, on_eof='raise')
                 matrix_parser.read_full_exact(rdms[state_idx][component])
 
         rdms = rdms.view('c8')
@@ -200,9 +200,8 @@ class L910Parser(NewLinkParser):
             self.n_transitions,
             dtype=[('idx', 'u4'), ('fdx', 'u4'), ('osc', 'f4')]
         )
-
         for jdx in track(range(self.n_transitions), description='Reading CI Oscillator Strengths...'):
-            self.stepper.step_to(osc_in)
+            self.stepper.step_to(osc_in, on_eof='raise')
             info = self.stepper.fwp.last_line.split()
             osc[jdx]['idx'] = info[4]
             osc[jdx]['fdx'] = info[6]
@@ -213,8 +212,6 @@ class L910Parser(NewLinkParser):
                 Resource.ci_osc: osc['osc']}
 
     def read_osc_and_tdms(self, /) -> dict[Resource, np.ndarray]:
-        print('Parsing CI Oscillator Strengths & 1e-TDMs')
-
         transition_in = self.stepper.get_anchor_predicate(self.TRANSITION_ANCHOR)
         osc_in = self.stepper.get_anchor_predicate(self.OSC_ANCHOR)
         tdm_in = self.stepper.get_anchor_predicate(self.TDM_MATRIX_ANCHOR)
@@ -247,7 +244,8 @@ class L910Parser(NewLinkParser):
             Resource.ci_initial_idx: osc['idx'],
             Resource.ci_final_idx: osc['fdx'],
             Resource.ci_osc: osc['osc'],
-            Resource.ci_int1e_tdms: tdms}
+            Resource.ci_int1e_tdms: tdms
+        }
 
     @property
     def n_transitions(self) -> int:
