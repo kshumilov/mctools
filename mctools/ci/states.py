@@ -6,7 +6,7 @@ import attrs
 import h5py
 import numpy as np
 import pandas as pd
-import rich.repr
+
 import scipy
 
 from mctools.basic.basis import MolecularOrbitalBasis
@@ -15,26 +15,31 @@ from mctools.newcore.consolidator import Consolidator
 from mctools.newcore.metadata import MCTOOLS_METADATA_KEY
 from mctools.newcore.resource import Resource
 
+from .common import CI_ROOT
+
 
 @attrs.define(repr=True, eq=True)
 class States(Consolidator):
     RESOURCE: ClassVar[Resource] = Resource.ci_states
-    ROOT = '/'.join(['ci/states'])
+    ROOT = '/'.join([CI_ROOT, 'states'])
 
     vecs: scipy.sparse.csr_matrix = attrs.field(
         validator=attrs.validators.instance_of(scipy.sparse.csr_matrix),
         metadata={MCTOOLS_METADATA_KEY: {'resource': Resource.ci_vecs}},
     )
+
     rdms: np.ndarray = attrs.field(
         converter=np.asarray,
         validator=attrs.validators.instance_of(np.ndarray),
         metadata={MCTOOLS_METADATA_KEY: {'resource': Resource.ci_int1e_rdms}},
         repr=False
     )
+
     graph: DASGraph = attrs.field(
         validator=attrs.validators.instance_of(DASGraph),
         metadata={MCTOOLS_METADATA_KEY: {'resource': Resource.ci_graph}},
     )
+
     mobasis: MolecularOrbitalBasis = attrs.field(
         validator=attrs.validators.instance_of(MolecularOrbitalBasis),
         metadata={MCTOOLS_METADATA_KEY: {'resource': Resource.mo_basis}},

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import ClassVar, Any
+from typing import ClassVar, Any, Sequence
 
 import attrs
 import numpy as np
@@ -9,7 +9,9 @@ import pandas as pd
 from mctools.newcore import Consolidator
 from mctools.newcore.resource import Resource
 from mctools.newcore.metadata import MCTOOLS_METADATA_KEY
+
 from .states import States
+from .common import CI_ROOT
 
 __all__ = [
     'Transitions',
@@ -19,7 +21,7 @@ __all__ = [
 @attrs.define(repr=True, eq=True)
 class Transitions(Consolidator):
     RESOURCE: ClassVar[Resource] = Resource.ci_transitions
-    ROOT = '/'.join(['ci/transitions'])
+    ROOT = '/'.join([CI_ROOT, 'transitions'])
 
     tdms: np.ndarray = attrs.field(
         converter=np.asarray,
