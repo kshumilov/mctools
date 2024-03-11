@@ -11,19 +11,19 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-@pytest.fixture(params=['gaussian/casscf'])
+@pytest.fixture(params=['gaussian/kedge'])
 def calc(request, shared_datadir: Path) -> Path:
     return shared_datadir / request.param
 
 
 @pytest.fixture
 def logname(calc: Path) -> Path:
-    return calc / f'gdv.log'
+    return calc / 'rasci-1r1h12o_2r49e50o_3r1p10o.casscf_sa50_50s_ref.tzvpall.ybi6.bl_315.gdv_j14p.16645549.log'
 
 
 @pytest.fixture
 def fchkname(calc: Path) -> Path:
-    return calc / f'gdv.fchk'
+    return calc / 'rasci-1r1h12o_2r49e50o_3r1p10o.casscf_sa50_50s_ref.tzvpall.ybi6.bl_315.gdv_j14p.16645549.fchk'
 
 
 @pytest.fixture

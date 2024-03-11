@@ -2,11 +2,11 @@ import io
 
 import pytest
 
-from parsing.core.error import ParsingError
+from mctools.parsing.core.error import ParsingError
 
-from parsing.gaussian.log.route import RouteParser
-from parsing.gaussian.log.parser import LogParser
-from parsing.gaussian.fchk import FchkParser
+from mctools.parsing.gaussian.log.route import RouteParser
+from mctools.parsing.gaussian.log.parser import LogParser
+from mctools.parsing.gaussian.fchk import FchkParser
 
 
 @pytest.fixture
