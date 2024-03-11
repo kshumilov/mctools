@@ -23,21 +23,24 @@ class Transitions(Consolidator):
     RESOURCE: ClassVar[Resource] = Resource.ci_transitions
     ROOT = '/'.join([CI_ROOT, 'transitions'])
 
-    tdms: np.ndarray = attrs.field(
-        converter=np.asarray,
-        validator=attrs.validators.instance_of(np.ndarray),
-        metadata={MCTOOLS_METADATA_KEY: {'resource': Resource.ci_int1e_tdms}},
-        repr=False
-    )
-
     states: States = attrs.field(
         validator=attrs.validators.instance_of(States)
     )
 
-    def get_state_properties(self, props: list[str]) -> pd.DataFrame:
+    tdms: np.ndarray | None = attrs.field(
+        default=None,
+        converter=np.asarray,
+        validator=attrs.validators.optional(
+            attrs.validators.instance_of(np.ndarray)
+        ),
+        metadata={MCTOOLS_METADATA_KEY: {'resource': Resource.ci_int1e_tdms}},
+        repr=False
+    )
+
+    def get_state_properties(self, props: Sequence[str]) -> pd.DataFrame:
         dfs = self.states.df[['idx', *props]]
 
-        df = self.df[['idx', 'fdx']].merge(
+        df = ((self.df[['idx', 'fdx']].merge(
             dfs, how='left',
             right_on=['idx'],
             left_on=['idx'],
@@ -51,7 +54,7 @@ class Transitions(Consolidator):
             copy=True
         ).drop(columns=['idx']).rename(
             columns={col: f'{col}_fdx' for col in props}
-        )
+        )))
 
         return df
 
@@ -65,6 +68,14 @@ class Transitions(Consolidator):
 
         df = pd.DataFrame.from_dict(df_dict)
         df[cls.RESOURCE_IDX_COL] = np.arange(len(df))
-        df.index.name = 'state_idx'
+        df.index.name = 'transition_idx'
         return df
 
+    @classmethod
+    def get_build_resources(cls) -> Resource:
+        return (
+            Resource.ci_states |
+            Resource.ci_initial_idx |
+            Resource.ci_final_idx |
+            Resource.ci_osc
+        )

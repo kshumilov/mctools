@@ -8,6 +8,7 @@ from mctools.newcore.resource import Resource
 from mctools.newcore.storage import Storage
 from mctools.basic.basis import AtomicOrbitalBasis, MolecularOrbitalBasis
 from mctools.ci.states import States
+from mctools.ci.transitions import Transitions
 
 from . import LogParser, FchkParser
 
@@ -46,5 +47,5 @@ def parse_gaussian_calc(filenames: Sequence[pathlib.Path], requested: Resource) 
             resources.update(data)
 
     return Storage(resources=resources, consolidators=[
-        AtomicOrbitalBasis, MolecularOrbitalBasis, States,
+        AtomicOrbitalBasis, MolecularOrbitalBasis, States, Transitions,
     ])

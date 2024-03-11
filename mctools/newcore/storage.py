@@ -34,19 +34,19 @@ class Storage:
 
         results = []
         available = self.get_available_resources()
-        for i, builder in enumerate(self.consolidators):
-            required = builder.get_build_resources()
+        for i, consolidator_class in enumerate(self.consolidators):
+            required = consolidator_class.get_build_resources()
             if len(available & required) == len(required):
-                result = builder.from_resources(self.resources)
-                results.append((builder.RESOURCE, result))
-                self.complete.append(result)
+                consolidator = consolidator_class.from_resources(self.resources)
+                results.append((consolidator_class.RESOURCE, consolidator))
+                self.complete.append(consolidator)
                 to_pop.append(i)
 
         for i in to_pop:
             self.consolidators.pop(i)
 
-        for resource, result in results:
-            self.add_resource(resource, result)
+        for resource, data in results:
+            self.add_resource(resource, data)
 
     def get_available_resources(self) -> Resource:
         available = Resource.NONE()
