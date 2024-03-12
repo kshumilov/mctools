@@ -10,6 +10,8 @@ import h5py
 import numpy as np
 import pandas as pd
 
+from mctools.cli.console import console
+
 from mctools.newcore.resource import Resource
 from .metadata import MCTOOLS_METADATA_KEY
 
@@ -48,7 +50,7 @@ class Archived(metaclass=abc.ABCMeta):
         for attr_name, attribute in attrs.fields_dict(type(self)).items():
             metadata = attribute.metadata.get(MCTOOLS_METADATA_KEY, {})
 
-            if metadata.get(self.IGNORE_KEY, False) or not attribute.init or attribute.default is None:
+            if metadata.get(self.IGNORE_KEY, False) or not attribute.init:
                 continue
 
             elif to_hdf5 := getattr(self, f'{attr_name}_{self.TO_KEY}', None):
@@ -66,11 +68,13 @@ class Archived(metaclass=abc.ABCMeta):
                     with h5py.File(filename, 'a') as file:
                         file.require_dataset('/'.join([path, name]), data=value, shape=value.shape, dtype=value.dtype)
                     del file
-                else:
+                elif value is not None:
                     with h5py.File(filename, 'a') as file:
                         gr = file.require_group(path)
                         gr.attrs[name] = value
                     del file
+                else:
+                    continue
 
     @classmethod
     def from_hdf5(cls, filename: pathlib.Path, /, prefix: str = '') -> Archived:
@@ -148,6 +152,7 @@ class Resourced(metaclass=abc.ABCMeta):
                 value = resources.get(bases[0].RESOURCE)
 
             elif resource := metadata.get('resource'):
+                console.log(attr_name, resource)
                 value = resources.get(resource)
 
             else:
