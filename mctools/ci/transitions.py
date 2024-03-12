@@ -52,7 +52,7 @@ class Transitions(Consolidator):
             right_on=['idx'],
             left_on=['fdx'],
             copy=True
-        ).drop(columns=['idx']).rename(
+        ).drop(columns=['fdx']).rename(
             columns={col: f'{col}_fdx' for col in props}
         )))
 
