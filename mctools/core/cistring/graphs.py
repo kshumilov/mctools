@@ -71,7 +71,7 @@ class SimpleGraph:
 
     @max_norb.default
     def _get_default_max_norb(self) -> int | float:
-        if self.config_dtype.type is object:
+        if self.config_dtype.type is np.object_:
             return np.inf
         return self.config_dtype.itemsize * self.BYTE_TO_BITS
 
