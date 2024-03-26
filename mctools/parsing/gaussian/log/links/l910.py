@@ -122,10 +122,10 @@ class L910Parser(NewLinkParser):
         state_in = self.stepper.get_anchor_predicate(self.STATE_ANCHOR)
 
         state_idx = np.zeros(self.n_states, dtype=np.min_scalar_type(self.n_states))
-        energies = np.zeros(self.n_states, dtype=np.float32)
+        energies = np.zeros(self.n_states, dtype=np.float64)
 
         n_configs = min(self.ci_graph.n_configs, self.MAX_N_CONFIGS)
-        vec_coef = np.zeros((self.n_states, n_configs), dtype=np.complex64)
+        vec_coef = np.zeros((self.n_states, n_configs), dtype=np.complex128)
         vec_addr = np.zeros((self.n_states, n_configs), dtype=np.min_scalar_type(self.ci_graph.n_configs))
 
         for idx in track(range(self.n_states), description="Reading CI Energies & Vectors..."):
@@ -182,7 +182,7 @@ class L910Parser(NewLinkParser):
         ]
 
         shape = (self.n_states, self.ci_graph.n_orb, self.ci_graph.n_orb)
-        rdms = np.zeros(shape, dtype=[('R', 'f4'), ('I', 'f4')])
+        rdms = np.zeros(shape, dtype=[('R', 'f8'), ('I', 'f8')])
 
         matrix_parser = MatrixParser(stepper=self.stepper)
         for state_idx in track(range(self.n_states), description='Reading CI State RDMs...'):
@@ -191,14 +191,14 @@ class L910Parser(NewLinkParser):
                 self.stepper.step_to(rdm_part_in, on_eof='raise')
                 matrix_parser.read_full_exact(rdms[state_idx][component])
 
-        rdms = rdms.view('c8')
+        rdms = rdms.view('c16')
         return {Resource.ci_int1e_rdms: rdms}
 
     def read_osc(self, /) -> dict[Resource, np.ndarray]:
         osc_in = self.stepper.get_anchor_predicate(self.OSC_ANCHOR)
         osc = np.zeros(
             self.n_transitions,
-            dtype=[('idx', 'u4'), ('fdx', 'u4'), ('osc', 'f4')]
+            dtype=[('idx', 'u4'), ('fdx', 'u4'), ('osc', 'f8')]
         )
         for jdx in track(range(self.n_transitions), description='Reading CI Oscillator Strengths...'):
             self.stepper.step_to(osc_in, on_eof='raise')
@@ -217,13 +217,13 @@ class L910Parser(NewLinkParser):
         tdm_in = self.stepper.get_anchor_predicate(self.TDM_MATRIX_ANCHOR)
         osc = np.zeros(
             self.n_transitions,
-            dtype=[('idx', 'u4'), ('fdx', 'u4'), ('osc', 'f4')]
+            dtype=[('idx', 'u4'), ('fdx', 'u4'), ('osc', 'f8')]
         )
 
         tdms_shape = (self.n_transitions, self.ci_graph.n_orb, self.ci_graph.n_orb)
         tdms = np.zeros(
             tdms_shape,
-            dtype=[('R', 'f4'), ('I', 'f4')]
+            dtype=[('R', 'f8'), ('I', 'f8')]
         )
 
         matrix_parser = MatrixParser(stepper=self.stepper)
@@ -239,7 +239,7 @@ class L910Parser(NewLinkParser):
             osc[jdx]['fdx'] = info[6]
             osc[jdx]['osc'] = info[8]
 
-        tdms = tdms.view('c8')
+        tdms = tdms.view('c16')
         return {
             Resource.ci_initial_idx: osc['idx'],
             Resource.ci_final_idx: osc['fdx'],

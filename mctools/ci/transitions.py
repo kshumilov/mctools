@@ -40,21 +40,31 @@ class Transitions(Consolidator):
     def get_state_properties(self, props: Sequence[str]) -> pd.DataFrame:
         dfs = self.states.df[['idx', *props]]
 
-        df = ((self.df[['idx', 'fdx']].merge(
-            dfs, how='left',
-            right_on=['idx'],
-            left_on=['idx'],
-            copy=True
-        ).drop(columns=['idx']).rename(
-            columns={col: f'{col}_idx' for col in props}
-        ).merge(
-            dfs, how='left',
-            right_on=['idx'],
-            left_on=['fdx'],
-            copy=True
-        ).drop(columns=['fdx']).rename(
-            columns={col: f'{col}_fdx' for col in props}
-        )))
+        # df = ((self.df[['idx', 'fdx']].merge(
+        #     dfs, how='left',
+        #     right_on=['idx'],
+        #     left_on=['idx'],
+        #     copy=True
+        # ).drop(columns=['idx']).rename(
+        #     columns={col: f'{col}_i' for col in props}
+        # ).merge(
+        #     dfs, how='left',
+        #     right_on=['idx'],
+        #     left_on=['fdx'],
+        #     copy=True
+        # ).drop(columns=['fdx']).rename(
+        #     columns={col: f'{col}_f' for col in props}
+        # )))
+
+        df = (
+            self.df[['idx', 'fdx']]
+            .merge(dfs, how='left', right_on=['idx'], left_on=['idx'])
+            .drop(columns=['idx'])
+            .rename(columns={col: f'{col}_i' for col in props})
+            .merge(dfs, how='left', left_on=['fdx'], right_on=['idx'])
+            .rename(columns={col: f'{col}_f' for col in props})
+            .drop(columns=['idx', 'fdx'])
+        )
 
         return df
 
